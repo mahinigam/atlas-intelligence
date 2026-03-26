@@ -9,17 +9,10 @@ import { LoadingPanel } from "./LoadingPanel";
 import { ProviderPanel } from "./ProviderPanel";
 import { SentimentGauge } from "./SentimentGauge";
 import { StatusBar } from "./StatusBar";
-import { TimeTravelSlider } from "./TimeTravelSlider";
 import { Radio } from "lucide-react";
 
 // Lazy load map to keep initial client bundle tight
 const WorldMap = lazy(async () => import("./WorldMap").then((m) => ({ default: m.WorldMap })));
-
-function buildFromDate(daysBack: number) {
-  const date = new Date();
-  date.setDate(date.getDate() - daysBack);
-  return date.toISOString().slice(0, 10);
-}
 
 export function CommandCenter() {
   const [selectedCountryCode, setSelectedCountryCode] = useState("IND");
@@ -27,9 +20,6 @@ export function CommandCenter() {
   const [report, setReport] = useState<Partial<SituationReport> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [daysBack, setDaysBack] = useState(3);
-
-  const fromDate = buildFromDate(daysBack);
   const handleCountrySelect = useEffectEvent((code: string, name: string) => {
     setSelectedCountryCode((currentCode) => (currentCode === code ? currentCode : code));
     setSelectedCountryName((currentName) => (currentName === name ? currentName : name));
@@ -39,10 +29,10 @@ export function CommandCenter() {
     let cancelled = false;
 
     setIsLoading(true);
-    setReport(null);
     setError(null);
+    setReport(null);
 
-    void fetchSituationReport(selectedCountryCode, fromDate)
+    void fetchSituationReport(selectedCountryCode)
       .then((data) => {
         if (cancelled) {
           return;
@@ -54,6 +44,7 @@ export function CommandCenter() {
         if (cancelled) {
           return;
         }
+        setReport(null);
         setError(err.message);
         setIsLoading(false);
       });
@@ -61,10 +52,10 @@ export function CommandCenter() {
     return () => {
       cancelled = true;
     };
-  }, [fromDate, selectedCountryCode]);
+  }, [selectedCountryCode]);
 
   // Derived sentiment coloring for UI accents (must be Hex for WebGL MapLibre)
-  const sentimentScore = report?.regional_sentiment ?? 0;
+  const sentimentScore = report?.summary_status?.used_ai ? report.regional_sentiment ?? 0 : 0;
   const sentimentColor =
     sentimentScore >= 0.2
       ? "#218c68" // positive
@@ -107,8 +98,6 @@ export function CommandCenter() {
                 />
               </Suspense>
             </section>
-
-            <TimeTravelSlider daysBack={daysBack} onChange={setDaysBack} />
           </div>
 
           {/* RIGHT COLUMN: Intelligence Streams */}
@@ -128,7 +117,7 @@ export function CommandCenter() {
                 
                 {/* Visual Gauge */}
                 <div className="flex-shrink-0">
-                  <SentimentGauge score={report?.regional_sentiment ?? 0} />
+                  {report?.summary_status?.used_ai ? <SentimentGauge score={report.regional_sentiment ?? 0} /> : null}
                 </div>
               </div>
 
@@ -143,7 +132,7 @@ export function CommandCenter() {
                 
                 <AnimatePresence mode="popLayout">
                   <motion.div
-                    key={`${selectedCountryCode}-${fromDate}`}
+                    key={`${selectedCountryCode}-${report?.updated_at ?? "pending"}`}
                     initial={{ opacity: 0, scale: 0.98, filter: "blur(4px)" }}
                     animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
                     exit={{ opacity: 0, scale: 0.98, filter: "blur(4px)" }}
@@ -158,16 +147,13 @@ export function CommandCenter() {
                         Dominant Event
                       </p>
                       <p className="mt-2 text-lg font-bold leading-relaxed tracking-tight text-[var(--text)]">
-                        {report?.main_event ?? (isLoading ? "Processing Intelligence..." : "Awaiting initial intelligence stream...")}
+                        {report?.main_event ?? (isLoading ? "Processing AI summary..." : "")}
                       </p>
                     </div>
 
-                    {/* Situation Bullets or Streaming Text */}
-                    <div className="space-y-3">
-                      {(report?.situation_report ?? [
-                        "Country boundary map loaded. Atlas interface standing by.",
-                        "Select a region to trigger the event summarization pipeline.",
-                      ]).map((bullet, idx) => (
+                    {!!report?.situation_report?.length && (
+                      <div className="space-y-3">
+                        {report.situation_report.map((bullet, idx) => (
                         <motion.div
                           key={idx}
                           initial={{ opacity: 0, x: -10 }}
@@ -185,7 +171,8 @@ export function CommandCenter() {
                           </div>
                         </motion.div>
                       ))}
-                    </div>
+                      </div>
+                    )}
 
                     {!!report?.pipeline_status?.length && (
                       <div className="mt-6 grid gap-3">
@@ -224,10 +211,10 @@ export function CommandCenter() {
                     )}
 
                     {error && (
-                    <motion.div 
-                      initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-                      className="mt-6 rounded-2xl bg-[var(--negative)]/10 px-4 py-3 border border-[var(--negative)]/20"
-                    >
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                        className="mt-6 rounded-2xl border border-[var(--negative)]/20 bg-[var(--negative)]/10 px-4 py-3"
+                      >
                         <p className="data-font text-xs font-bold uppercase tracking-widest text-[var(--negative)]">
                           Error: {error}
                         </p>
@@ -274,14 +261,13 @@ export function CommandCenter() {
                       />
                     ))
                   ) : (
-                    <motion.div 
+                    <motion.div
                       key="empty"
                       initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                       className="clay-card flex items-center justify-center p-8 text-center"
                     >
                       <p className="text-sm font-medium leading-relaxed text-[var(--text-soft)]">
-                        No telemetry established.<br/>
-                        Awaiting global sector selection.
+                        {isLoading ? "Loading live coverage..." : "No live coverage available for this request."}
                       </p>
                     </motion.div>
                   )}

@@ -2,10 +2,10 @@ import json
 import hashlib
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
-from fastapi import Depends, FastAPI, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -13,9 +13,9 @@ from app.cache import CacheClient
 from app.config import Settings, get_settings
 from app.country_metadata import COUNTRIES, get_country_name
 from app.dependencies import get_cache, get_http_client
-from app.schemas import CacheStatus, GeminiSummary, HistoricalMetric, IntelligenceResponse, PipelineStatus, SummaryStatus
-from app.services.news import fetch_country_news, get_enriched_observability_snapshot, get_global_observability_snapshot, get_historical_provider_metrics
-from app.services.summarizer import summarize_articles
+from app.schemas import CacheStatus, GeminiSummary, HistoricalMetric, IntelligenceResponse, SummaryStatus
+from app.services.news import fetch_country_news, get_enriched_observability_snapshot, get_historical_provider_metrics
+from app.services.summarizer import AIUnavailableError, summarize_articles
 
 logging.basicConfig(
     level=logging.INFO,
@@ -86,7 +86,7 @@ async def list_countries() -> list[dict[str, str]]:
 @app.get(f"{settings.api_prefix}/intelligence", response_model=IntelligenceResponse)
 async def get_intelligence(
     country_code: str = Query(..., min_length=2, max_length=3),
-    from_date: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    from_date: str = Query(default_factory=_default_from_date, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     cache: CacheClient = Depends(get_cache),
     client: httpx.AsyncClient = Depends(get_http_client),
     app_settings: Settings = Depends(get_settings),
@@ -115,15 +115,22 @@ async def get_intelligence(
         )
         logger.info("Summary cache HIT for %s", summary_cache_key)
     else:
-        summary_result = await summarize_articles(
-            client=client,
-            settings=app_settings,
-            country_name=country_name,
-            from_date=from_date,
-            articles=news_pipeline.headline_articles,
+        try:
+            summary = await summarize_articles(
+                client=client,
+                settings=app_settings,
+                country_name=country_name,
+                from_date=from_date,
+                articles=news_pipeline.headline_articles,
+            )
+        except AIUnavailableError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+        summary_status = SummaryStatus(
+            status="ok",
+            message="AI summarization completed successfully.",
+            used_ai=True,
         )
-        summary = summary_result.summary
-        summary_status = summary_result.status
         await cache.set_json(
             summary_cache_key,
             {
@@ -144,7 +151,7 @@ async def get_intelligence(
         headline_articles=news_pipeline.headline_articles,
         provider_statuses=news_pipeline.provider_statuses,
         summary_status=summary_status,
-        pipeline_status=news_pipeline.pipeline_status + _summary_pipeline_status(summary_status),
+        pipeline_status=news_pipeline.pipeline_status,
         cache=CacheStatus(
             article_cache_hit=news_pipeline.article_cache_hit,
             summary_cache_hit=summary_status.cache_hit,
@@ -158,7 +165,7 @@ async def get_intelligence(
 @app.get(f"{settings.api_prefix}/intelligence/stream")
 async def stream_intelligence(
     country_code: str = Query(..., min_length=2, max_length=3),
-    from_date: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    from_date: str = Query(default_factory=_default_from_date, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     client: httpx.AsyncClient = Depends(get_http_client),
     app_settings: Settings = Depends(get_settings),
 ):
@@ -179,20 +186,32 @@ async def stream_intelligence(
         articles_json = json.dumps([a.model_dump(mode="json") for a in news_pipeline.feed_articles])
         yield f"event: news\ndata: {articles_json}\n\n"
 
-        summary_result = await summarize_articles(
-            client=client,
-            settings=app_settings,
-            country_name=country_name,
-            from_date=from_date,
-            articles=list(news_pipeline.headline_articles),
+        try:
+            summary = await summarize_articles(
+                client=client,
+                settings=app_settings,
+                country_name=country_name,
+                from_date=from_date,
+                articles=list(news_pipeline.headline_articles),
+            )
+        except AIUnavailableError as exc:
+            error_payload = {"detail": str(exc), "status_code": exc.status_code}
+            yield f"event: error\ndata: {json.dumps(error_payload)}\n\n"
+            yield "event: end\ndata: {}\n\n"
+            return
+
+        summary_status = SummaryStatus(
+            status="ok",
+            message="AI summarization completed successfully.",
+            used_ai=True,
         )
         final_payload = {
-            **summary_result.summary.model_dump(mode="json"),
-            "summary_status": summary_result.status.model_dump(mode="json"),
+            **summary.model_dump(mode="json"),
+            "summary_status": summary_status.model_dump(mode="json"),
             "headline_articles": [a.model_dump(mode="json") for a in news_pipeline.headline_articles],
             "pipeline_status": [
                 status.model_dump(mode="json")
-                for status in news_pipeline.pipeline_status + _summary_pipeline_status(summary_result.status)
+                for status in news_pipeline.pipeline_status
             ],
             "cache": {
                 "article_cache_hit": news_pipeline.article_cache_hit,
@@ -225,26 +244,5 @@ def _summary_cache_key(*, country_code: str, from_date: str, headline_articles: 
     return f"atlas:summary:{country_code}:{from_date}:{digest}"
 
 
-def _summary_pipeline_status(summary_status: SummaryStatus) -> list[PipelineStatus]:
-    if summary_status.status == "quota_exhausted":
-        return [
-            PipelineStatus(
-                code="ai_unavailable",
-                level="warning",
-                message="AI summarization is currently unavailable.",
-            ),
-            PipelineStatus(
-                code="showing_raw_news_only",
-                level="warning",
-                message="Showing raw news only because AI summarization is currently unavailable.",
-            ),
-        ]
-    if summary_status.status in {"raw_only", "unconfigured"}:
-        return [
-            PipelineStatus(
-                code="showing_raw_news_only",
-                level="warning",
-                message=summary_status.message,
-            )
-        ]
-    return []
+def _default_from_date() -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=3)).date().isoformat()

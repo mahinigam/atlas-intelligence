@@ -1,5 +1,10 @@
+import asyncio
+
+import httpx
+
+from app.config import Settings
 from app.schemas import Article
-from app.services.summarizer import build_summary_prompt
+from app.services.summarizer import AIUnavailableError, build_summary_prompt, summarize_articles
 
 
 def test_prompt_includes_required_json_contract() -> None:
@@ -23,3 +28,32 @@ def test_prompt_includes_required_json_contract() -> None:
     assert '"situation_report"' in prompt
     assert "United States" in prompt
     assert "gnews, newsdata" in prompt
+
+
+def test_summarizer_requires_configured_ai() -> None:
+    async def run() -> None:
+        async with httpx.AsyncClient() as client:
+            await summarize_articles(
+                client=client,
+                settings=Settings(gemini_api_key=None),
+                country_name="United States",
+                from_date="2026-03-20",
+                articles=[
+                    Article(
+                        title="Infrastructure response expands",
+                        source="Atlas Wire",
+                        provider="gnews",
+                        providers=["gnews"],
+                        url="https://example.com",
+                        snippet="Authorities expand emergency support and announce transport repairs.",
+                    )
+                ],
+            )
+
+    try:
+        asyncio.run(run())
+    except AIUnavailableError as exc:
+        assert exc.status_code == 503
+        assert str(exc) == "Gemini API key is not configured."
+    else:
+        raise AssertionError("Expected summarize_articles to require a configured AI key")

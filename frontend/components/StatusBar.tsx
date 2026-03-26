@@ -26,16 +26,8 @@ export function StatusBar({
   const providerUnavailable = providerStatuses.some((status) =>
     ["quota_exhausted", "unavailable", "timeout", "cooldown"].includes(status.status)
   );
-  const rawOnly = pipelineStatus.some((status) => status.code === "showing_raw_news_only");
   const providerLabel = providerUnavailable ? "NEWS UNAVAILABLE" : "NEWS READY";
-  const summaryLabel =
-    summaryStatus?.status === "quota_exhausted"
-      ? "AI UNAVAILABLE"
-      : summaryStatus?.used_ai
-        ? "AI SUMMARY"
-        : rawOnly
-          ? "RAW ONLY"
-          : "AI READY";
+  const summaryLabel = summaryStatus?.used_ai ? "AI SUMMARY" : "AI REQUIRED";
 
   useEffect(() => {
     const timer = setInterval(() => {

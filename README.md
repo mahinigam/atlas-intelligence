@@ -1,63 +1,87 @@
 # Atlas.Intelligence
 
-Real-time geopolitical intelligence platform. Multi-provider news ingestion → AI summarization → interactive 3D map. 1,700+ lines of pipeline logic, 45-country knowledge base, 81-domain source reputation system.
+Atlas.Intelligence is a geopolitical news analysis app: a FastAPI backend pulls articles from multiple providers, ranks and deduplicates them, and a Next.js frontend renders the result as a map-driven command center.
+
+The project is strongest where it chooses signal over spectacle. It does not just fetch headlines. It scores source quality, filters weak country matches, clusters overlapping stories, and degrades cleanly when providers, Redis, or AI summarization are unavailable.
 
 ## What It Does
 
-Click a country on the map → the backend fans out to **6 news APIs in parallel**, deduplicates via canonical URL normalization, scores every article against a curated **source reputation table** (Reuters 0.98 → InfoWars 0.15), ranks by entity-density relevance using a **structured country knowledge base** (capitals, leaders, ministries, demonyms, aliases), clusters stories with **Jaccard n-gram similarity**, then feeds the top articles to **Gemini Flash** for a structured situation report with sentiment analysis. The frontend renders it on a MapLibre GL globe with sentiment-driven color feedback in real time.
+- Select a country on the map.
+- Fetch news from six providers in parallel.
+- Normalize and deduplicate overlapping coverage.
+- Rank articles using country metadata, freshness, provider performance, and source reputation.
+- Cluster related stories into a smaller representative set.
+- Generate a concise situation report and sentiment score when Gemini is configured.
+- Expose provider health and observability data alongside the user-facing result.
+
+## Why This Repo Is Interesting
+
+- The backend pipeline is substantial. [`backend/app/services/news.py`](/Users/mahinigam/Codes/Atlas.Intelligence/atlas.intelligence/backend/app/services/news.py) is 1,695 lines and contains the real ranking, deduplication, provider fallback, and clustering logic.
+- The country model is not superficial. [`backend/app/country_metadata.py`](/Users/mahinigam/Codes/Atlas.Intelligence/atlas.intelligence/backend/app/country_metadata.py) holds a structured knowledge base used to improve relevance scoring.
+- The frontend has a clear product point of view. The interface is not a template dashboard; it is a map-first command surface with opinionated visual styling.
+- The app is resilient by design. Missing API keys, empty providers, AI quota failures, and Redis outages all have explicit fallback behavior instead of silent failure.
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Next.js 16 (App Router)                                     │
-│  MapLibre GL · Framer Motion · Tailwind v4                   │
-│  Components: WorldMap, CommandCenter, ProviderPanel           │
-│              SentimentGauge, NewsCard, TimeTravelSlider        │
-└────────────────────────┬─────────────────────────────────────┘
-                         │ REST
-┌────────────────────────▼─────────────────────────────────────┐
-│  FastAPI                                                      │
-│  /intelligence → fetch_country_news → summarize_articles      │
-│  /observability → historical metrics + country quality        │
-│                                                               │
-│  Pipeline: 6 providers → dedupe → rank → cluster → summarize │
-│  Services: source_reputation · country_metadata · cache       │
-│  Infra: Redis (cache + time-series metrics)                   │
-└──────────────────────────────────────────────────────────────┘
-         ▼              ▼              ▼            ▼
-   World News    NewsCatcher    GNews    Currents   ...
+```text
+Frontend (Next.js 16, React 19, TypeScript)
+  -> MapLibre globe and command-center UI
+  -> Calls REST API for country intelligence
+
+Backend (FastAPI, httpx, Pydantic, Redis)
+  -> Concurrent provider fetch
+  -> Article normalization and deduplication
+  -> Country-aware relevance ranking
+  -> Story clustering
+  -> Gemini summarization
+  -> Observability snapshots and provider metrics
 ```
 
-## Tech Stack
+## Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | Next.js 16, React 19, TypeScript, Tailwind v4, Framer Motion, MapLibre GL JS, Lucide |
-| Backend | FastAPI, Pydantic v2, httpx (async), Redis |
-| AI | Gemini 1.5 Flash (structured JSON generation) |
-| News Providers | World News API, NewsCatcher, GNews, Currents, NewsAPI.org, NewsData.io |
-| Observability | Redis time-series, per-provider historical metrics, country quality snapshots |
+| Layer | Tools |
+| --- | --- |
+| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4, Framer Motion, MapLibre GL |
+| Backend | FastAPI, httpx, Pydantic v2, Redis |
+| AI | Gemini Flash via HTTP API |
+| News providers | World News API, NewsCatcher, GNews, Currents, NewsAPI.org, NewsData.io |
 
-## Engineering Highlights
+## Repository Layout
 
-- **Multi-provider orchestration** — 6 APIs fetched concurrently via `asyncio.gather`, per-provider timeout budgets, circuit-breaker cooldowns, learned fallback ordering from production usage history
-- **Source reputation system** — 81 curated domains with trust scores, Redis-persisted for runtime evolution, blended 65/35 with provider quality for article scoring
-- **Country knowledge base** — 45 countries with structured `CountryInfo` dataclass (8 fields: capital, leader titles, ministries, regions, demonyms, aliases, cities, key entities) driving entity-density relevance scoring
-- **Article deduplication** — Canonical URL normalization (tracking param stripping, query sorting, scheme normalization) + content fingerprinting
-- **Jaccard n-gram clustering** — Word-level bigram sets with SequenceMatcher confirmation to group stories across providers without false positives
-- **Persistent observability** — Every provider fetch appends a timestamped metric to Redis; `/observability` returns historical latency, success rates, country coverage quality, and stale-cache warnings
-- **Graceful degradation** — Missing API keys → deterministic synthetic feed; all providers down → fallback content with transparent pipeline status flags; no Redis → in-memory no-op cache
+```text
+atlas.intelligence/
+├── backend/
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── config.py
+│   │   ├── cache.py
+│   │   ├── country_metadata.py
+│   │   ├── schemas.py
+│   │   └── services/
+│   │       ├── news.py
+│   │       ├── source_reputation.py
+│   │       └── summarizer.py
+│   ├── tests/
+│   ├── Dockerfile
+│   └── requirements.txt
+├── frontend/
+│   ├── app/
+│   ├── components/
+│   ├── lib/
+│   └── public/data/
+└── README.md
+```
 
-## Local Setup
+## Local Development
 
 ### Backend
 
 ```bash
 cd backend
-python -m venv .venv312 && source .venv312/bin/activate
+python -m venv .venv312
+source .venv312/bin/activate
 pip install -r requirements.txt
-cp .env.example .env  # fill in API keys
+cp .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -66,108 +90,80 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 cd frontend
 npm install
-cp .env.example .env.local  # set NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+cp .env.example .env.local
 npm run dev
 ```
 
+Frontend default: `http://localhost:3000`  
+Backend default: `http://localhost:8000`
+
 ## Environment Variables
 
-### Backend (`backend/.env`)
+### Backend
 
 | Variable | Purpose |
-|----------|---------|
-| `REDIS_URL` | Redis connection (cache + metrics). Falls back to in-memory if unavailable |
-| `GEMINI_API_KEY` | Gemini Flash for AI summarization |
-| `GEMINI_API_URL` | Gemini `generateContent` endpoint |
-| `GNEWS_API_KEY` | GNews provider |
-| `WORLDNEWS_API_KEY` | World News API provider |
-| `NEWSCATCHER_API_KEY` | NewsCatcher provider |
-| `NEWSAPI_ORG_API_KEY` | NewsAPI.org provider |
-| `CURRENTS_API_KEY` | Currents API provider |
-| `NEWSDATA_API_KEY` | NewsData.io provider |
+| --- | --- |
+| `REDIS_URL` | Cache and observability storage |
+| `GEMINI_API_KEY` | Enables AI summarization |
+| `GEMINI_API_URL` | Optional override for the Gemini endpoint |
+| `WORLDNEWS_API_KEY` | World News API |
+| `NEWSCATCHER_API_KEY` | NewsCatcher |
+| `GNEWS_API_KEY` | GNews |
+| `CURRENTS_API_KEY` | Currents |
+| `NEWSAPI_ORG_API_KEY` | NewsAPI.org |
+| `NEWSDATA_API_KEY` | NewsData.io |
 
-### Frontend (`frontend/.env.local`)
+If `GEMINI_API_KEY` is missing, the app still works, but returns ranked raw reporting instead of AI-generated summaries.
+
+### Frontend
 
 | Variable | Purpose |
-|----------|---------|
-| `NEXT_PUBLIC_API_BASE_URL` | Backend URL (`http://localhost:8000` locally) |
-| `NEXT_PUBLIC_COUNTRIES_GEOJSON_URL` | GeoJSON path for map boundaries |
+| --- | --- |
+| `NEXT_PUBLIC_API_BASE_URL` | Backend base URL |
+| `NEXT_PUBLIC_COUNTRIES_GEOJSON_URL` | Country geometry source |
 | `NEXT_PUBLIC_MAP_STYLE_URL` | Optional MapLibre style URL |
 
-## Deployment
-
-### Frontend → Vercel
-
-1. **Import the repo** in [vercel.com/new](https://vercel.com/new).
-2. **Set root directory** to `frontend`.
-3. **Framework preset**: Next.js (auto-detected).
-4. **Environment variables** — add in Vercel dashboard → Settings → Environment Variables:
-   ```
-   NEXT_PUBLIC_API_BASE_URL=https://your-backend.railway.app
-   NEXT_PUBLIC_COUNTRIES_GEOJSON_URL=/data/countries.geojson
-   ```
-5. **Deploy**. Vercel handles `npm install && next build` automatically.
-
-> If you get a build error about `useEffectEvent`, ensure your `next` version is `>=16.0.0` (React 19 experimental API).
-
-### Backend → Railway / Render / Fly.io
-
-The backend is a standard FastAPI app with a `Dockerfile`:
-
-```bash
-# Railway (one-click)
-railway login && railway init && railway up
-
-# Or Render / Fly.io via Dockerfile
-docker build -t atlas-backend ./backend
-docker run -p 8000:8000 --env-file backend/.env atlas-backend
-```
-
-Set all backend env vars in your hosting provider's dashboard. Redis can use **Upstash** (free tier, serverless) or **Railway Redis**.
-
-### CORS
-
-The backend allows all origins by default. For production, update `CORSMiddleware` in `main.py` to whitelist only your Vercel domain.
-
-## API Endpoints
+## API Surface
 
 | Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/v1/intelligence?country_code=USA&from_date=2026-03-20` | Full intelligence pipeline |
-| `GET` | `/api/v1/countries` | Supported country list |
-| `GET` | `/api/v1/observability` | System health + historical metrics |
-| `GET` | `/api/v1/observability/providers/{provider}` | Per-provider historical data |
+| --- | --- | --- |
+| `GET` | `/health` | Basic health check |
+| `GET` | `/api/v1/countries` | Supported countries |
+| `GET` | `/api/v1/intelligence` | Ranked articles plus summary for one country |
+| `GET` | `/api/v1/intelligence/stream` | Streaming variant of the intelligence response |
+| `GET` | `/api/v1/observability` | Global observability snapshot |
+| `GET` | `/api/v1/observability/providers/{provider}` | Historical metrics for one provider |
 
-## Project Structure
+Example:
 
+```bash
+curl "http://localhost:8000/api/v1/intelligence?country_code=IND"
 ```
-atlas.intelligence/
-├── backend/
-│   ├── app/
-│   │   ├── main.py              # FastAPI routes
-│   │   ├── config.py            # Settings (env-driven)
-│   │   ├── schemas.py           # Pydantic models
-│   │   ├── cache.py             # Redis client with time-series
-│   │   ├── country_metadata.py  # 45-country knowledge base
-│   │   ├── dependencies.py      # DI for httpx + Redis
-│   │   └── services/
-│   │       ├── news.py          # 1,700-line pipeline engine
-│   │       ├── source_reputation.py  # 81-domain trust table
-│   │       └── summarizer.py    # Gemini orchestration
-│   ├── Dockerfile
-│   └── requirements.txt
-├── frontend/
-│   ├── app/                     # Next.js App Router
-│   ├── components/
-│   │   ├── CommandCenter.tsx    # Main orchestration component
-│   │   ├── WorldMap.tsx         # MapLibre GL 3D map
-│   │   ├── ProviderPanel.tsx    # Provider health panel
-│   │   ├── NewsCard.tsx         # Article cards with scoring
-│   │   ├── SentimentGauge.tsx   # Sentiment speedometer
-│   │   ├── StatusBar.tsx        # Global status footer
-│   │   └── TimeTravelSlider.tsx # Date range control
-│   └── lib/
-│       ├── api.ts               # Backend API client
-│       └── types.ts             # TypeScript type definitions
-└── README.md
+
+## Tests
+
+The backend tests currently expect `backend` on `PYTHONPATH`.
+
+```bash
+PYTHONPATH=backend backend/.venv312/bin/pytest backend/tests -q
 ```
+
+Current result in this workspace: `5 passed`.
+
+## Deployment Notes
+
+- Frontend deploys cleanly to Vercel as a standard Next.js app.
+- Backend can run on Railway, Render, Fly.io, or any container host with Redis access.
+- CORS is currently open in [`backend/app/main.py`](/Users/mahinigam/Codes/Atlas.Intelligence/atlas.intelligence/backend/app/main.py). Lock that down before production.
+
+## Current Strengths
+
+- Strong backend logic relative to project size.
+- Clear product framing and coherent UX direction.
+- Real observability and fallback behavior, not just happy-path demos.
+
+## Current Gaps
+
+- Test execution depends on `PYTHONPATH`, which should be fixed in repo tooling.
+- The README and env examples need to stay aligned with the actual Gemini endpoint strategy.
+- Production hardening is not finished yet: open CORS, local-first setup, and limited test breadth make that clear.

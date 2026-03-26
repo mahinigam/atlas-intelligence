@@ -14,11 +14,8 @@ export async function fetchCountries(): Promise<Country[]> {
   return response.json() as Promise<Country[]>;
 }
 
-export async function fetchSituationReport(countryCode: string, fromDate: string): Promise<SituationReport> {
-  const params = new URLSearchParams({
-    country_code: countryCode,
-    from_date: fromDate,
-  });
+export async function fetchSituationReport(countryCode: string): Promise<SituationReport> {
+  const params = new URLSearchParams({ country_code: countryCode });
 
   const response = await fetch(`${backendBaseUrl}/api/v1/intelligence?${params.toString()}`, {
     cache: "no-store",

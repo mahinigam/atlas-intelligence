@@ -1,23 +1,24 @@
-"""AI summarization service — summarizes ranked headline articles with explicit status handling."""
+"""AI summarization service."""
 
 from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
 
 import httpx
 
 from app.config import Settings
-from app.schemas import Article, GeminiSummary, SummaryStatus
+from app.schemas import Article, GeminiSummary
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass(slots=True)
-class SummaryExecutionResult:
-    summary: GeminiSummary
-    status: SummaryStatus
+class AIUnavailableError(RuntimeError):
+    """Raised when the summarizer cannot produce a real AI result."""
+
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def build_summary_prompt(country_name: str, from_date: str, articles: list[Article]) -> str:
@@ -67,26 +68,18 @@ async def summarize_articles(
     country_name: str,
     from_date: str,
     articles: list[Article],
-) -> SummaryExecutionResult:
-    """Summarize ranked headline articles and return both content and execution state."""
+) -> GeminiSummary:
+    """Summarize ranked headline articles and require a real AI response."""
     if not articles:
-        return SummaryExecutionResult(
-            summary=_placeholder_summary(country_name, from_date, reason="no_articles"),
-            status=SummaryStatus(
-                status="raw_only",
-                message="No representative articles were available for AI summarization.",
-                used_ai=False,
-            ),
+        raise AIUnavailableError(
+            "No representative articles were available for AI summarization.",
+            status_code=424,
         )
 
     if not settings.gemini_api_key:
-        return SummaryExecutionResult(
-            summary=_placeholder_summary(country_name, from_date, reason="no_api_key"),
-            status=SummaryStatus(
-                status="unconfigured",
-                message="Gemini API key is not configured. Showing raw news only.",
-                used_ai=False,
-            ),
+        raise AIUnavailableError(
+            "Gemini API key is not configured.",
+            status_code=503,
         )
 
     payload = {
@@ -119,41 +112,32 @@ async def summarize_articles(
         )
 
         parsed = json.loads(_strip_code_fences(text_payload))
-        summary = GeminiSummary.model_validate(parsed)
-        return SummaryExecutionResult(
-            summary=summary,
-            status=SummaryStatus(
-                status="ok",
-                message="AI summarization completed successfully.",
-                used_ai=True,
-            ),
-        )
+        return GeminiSummary.model_validate(parsed)
 
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code
         logger.error("Gemini HTTP %s: %s", status_code, exc.response.text[:300])
         if status_code == 429:
-            return SummaryExecutionResult(
-                summary=_placeholder_summary(country_name, from_date, reason="quota"),
-                status=SummaryStatus(
-                    status="quota_exhausted",
-                    message="AI summarization is currently unavailable. Showing raw news only.",
-                    used_ai=False,
-                ),
+            raise AIUnavailableError(
+                "Gemini quota exhausted.",
+                status_code=503,
             )
+        raise AIUnavailableError(
+            f"Gemini returned HTTP {status_code}.",
+            status_code=502,
+        ) from exc
     except json.JSONDecodeError as exc:
         logger.error("Gemini returned non-JSON: %s", exc)
+        raise AIUnavailableError(
+            "Gemini returned an invalid response payload.",
+            status_code=502,
+        ) from exc
     except Exception as exc:
         logger.error("Gemini summarization failed: %s", exc)
-
-    return SummaryExecutionResult(
-        summary=_placeholder_summary(country_name, from_date, reason="error"),
-        status=SummaryStatus(
-            status="raw_only",
-            message="AI summarizer temporarily unavailable. Showing raw news only.",
-            used_ai=False,
-        ),
-    )
+        raise AIUnavailableError(
+            "Gemini summarization failed.",
+            status_code=502,
+        ) from exc
 
 
 def _strip_code_fences(text_payload: str) -> str:
@@ -163,51 +147,3 @@ def _strip_code_fences(text_payload: str) -> str:
     if cleaned.endswith("```"):
         cleaned = cleaned.rsplit("```", 1)[0]
     return cleaned.strip()
-
-
-def _placeholder_summary(
-    country_name: str,
-    from_date: str,
-    *,
-    reason: str,
-) -> GeminiSummary:
-    if reason == "quota":
-        return GeminiSummary(
-            main_event=f"{country_name} — AI analysis unavailable",
-            regional_sentiment=0.0,
-            situation_report=[
-                "AI summarization is currently unavailable, so Atlas is showing ranked raw reporting only.",
-                "Representative articles remain deduplicated, normalized, and country-filtered.",
-                f"Historical sweep remains anchored to {from_date}.",
-            ],
-        )
-    if reason == "no_articles":
-        return GeminiSummary(
-            main_event=f"{country_name} — No representative articles available",
-            regional_sentiment=0.0,
-            situation_report=[
-                "Live providers returned no articles that passed country relevance ranking.",
-                "Atlas withheld weakly matched items instead of fabricating a summary.",
-                f"Historical sweep remains anchored to {from_date}.",
-            ],
-        )
-    if reason == "no_api_key":
-        return GeminiSummary(
-            main_event=f"{country_name} — Awaiting Gemini configuration",
-            regional_sentiment=0.0,
-            situation_report=[
-                "Gemini API key is not configured, so Atlas is showing ranked raw reporting only.",
-                "Provider results are still normalized, deduplicated, and country-filtered.",
-                f"Historical sweep remains anchored to {from_date}.",
-            ],
-        )
-
-    return GeminiSummary(
-        main_event=f"{country_name} — AI analysis temporarily unavailable",
-        regional_sentiment=0.0,
-        situation_report=[
-            "Gemini summarization encountered an error and Atlas fell back to raw ranked reporting.",
-            "Representative articles remain deduplicated, normalized, and country-filtered.",
-            f"Historical sweep remains anchored to {from_date}.",
-        ],
-    )
