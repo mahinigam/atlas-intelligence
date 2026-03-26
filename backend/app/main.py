@@ -25,6 +25,10 @@ logging.basicConfig(
 logger = logging.getLogger("atlas")
 
 
+def _default_from_date() -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=3)).date().isoformat()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with httpx.AsyncClient(timeout=40.0) as client:
@@ -236,7 +240,3 @@ def _summary_cache_key(*, country_code: str, from_date: str, headline_articles: 
         ).encode("utf-8")
     ).hexdigest()[:16]
     return f"atlas:summary:{country_code}:{from_date}:{digest}"
-
-
-def _default_from_date() -> str:
-    return (datetime.now(timezone.utc) - timedelta(days=3)).date().isoformat()
