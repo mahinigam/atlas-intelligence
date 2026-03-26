@@ -50,6 +50,11 @@ class SummaryStatus(BaseModel):
     message: str
     used_ai: bool = False
     cache_hit: bool = False
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    thoughts_tokens: int | None = None
 
 
 class PipelineStatus(BaseModel):

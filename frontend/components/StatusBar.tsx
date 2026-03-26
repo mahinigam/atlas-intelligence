@@ -28,6 +28,10 @@ export function StatusBar({
   );
   const providerLabel = providerUnavailable ? "NEWS UNAVAILABLE" : "NEWS READY";
   const summaryLabel = summaryStatus?.used_ai ? "AI SUMMARY" : "AI REQUIRED";
+  const summaryUsageLabel =
+    summaryStatus?.used_ai && summaryStatus.total_tokens
+      ? `${summaryStatus.total_tokens} TOK`
+      : null;
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -92,7 +96,7 @@ export function StatusBar({
             className={summaryStatus?.used_ai ? "text-[var(--positive)]" : "text-[var(--orange)]"}
           />
           <span className="data-font text-[10px] uppercase tracking-widest text-[var(--muted)]">
-            {summaryLabel}
+            {summaryUsageLabel ? `${summaryLabel} ${summaryUsageLabel}` : summaryLabel}
           </span>
         </div>
 

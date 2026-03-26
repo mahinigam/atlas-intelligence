@@ -116,7 +116,7 @@ async def get_intelligence(
         logger.info("Summary cache HIT for %s", summary_cache_key)
     else:
         try:
-            summary = await summarize_articles(
+            summary_result = await summarize_articles(
                 client=client,
                 settings=app_settings,
                 country_name=country_name,
@@ -126,11 +126,8 @@ async def get_intelligence(
         except AIUnavailableError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
-        summary_status = SummaryStatus(
-            status="ok",
-            message="AI summarization completed successfully.",
-            used_ai=True,
-        )
+        summary = summary_result.summary
+        summary_status = summary_result.status
         await cache.set_json(
             summary_cache_key,
             {
@@ -187,7 +184,7 @@ async def stream_intelligence(
         yield f"event: news\ndata: {articles_json}\n\n"
 
         try:
-            summary = await summarize_articles(
+            summary_result = await summarize_articles(
                 client=client,
                 settings=app_settings,
                 country_name=country_name,
@@ -200,11 +197,8 @@ async def stream_intelligence(
             yield "event: end\ndata: {}\n\n"
             return
 
-        summary_status = SummaryStatus(
-            status="ok",
-            message="AI summarization completed successfully.",
-            used_ai=True,
-        )
+        summary = summary_result.summary
+        summary_status = summary_result.status
         final_payload = {
             **summary.model_dump(mode="json"),
             "summary_status": summary_status.model_dump(mode="json"),

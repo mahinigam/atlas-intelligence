@@ -16,10 +16,16 @@ class Settings(BaseSettings):
     postgres_dsn: str = Field(default="postgresql+asyncpg://atlas:atlas@localhost:5432/atlas")
     redis_url: str = Field(default="redis://localhost:6379/0")
 
+    gemini_model: str = Field(default="gemini-2.5-flash-lite")
     gemini_api_url: str = Field(
-        default="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+        default="https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     )
     gemini_api_key: str | None = None
+    gemini_max_output_tokens: int = 220
+    gemini_thinking_budget: int = 0
+    gemini_prompt_char_budget: int = 2200
+    gemini_max_title_chars: int = 110
+    gemini_max_snippet_chars: int = 280
 
     worldnews_api_key: str | None = None
     worldnews_base_url: str = "https://api.worldnewsapi.com/search-news"

@@ -40,6 +40,11 @@ export type SummaryStatus = {
   message: string;
   used_ai: boolean;
   cache_hit: boolean;
+  model?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  total_tokens?: number | null;
+  thoughts_tokens?: number | null;
 };
 
 export type PipelineStatus = {
