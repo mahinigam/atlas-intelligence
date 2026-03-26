@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useEffectEvent, useRef, useState } from "react";
-import maplibregl, { FillLayerSpecification, Map } from "maplibre-gl";
+import { memo, useEffect, useEffectEvent, useRef } from "react";
+import maplibregl, { FilterSpecification, Map, StyleSpecification } from "maplibre-gl";
 
 type WorldMapProps = {
   selectedCountryCode: string;
@@ -12,11 +12,119 @@ type WorldMapProps = {
 const countryLayerId = "countries-fill";
 const selectedLayerId = "countries-selected";
 const glowLayerId = "countries-glow-border";
+const countriesSourceId = "countries";
+const countriesGeoJsonUrl =
+  process.env.NEXT_PUBLIC_COUNTRIES_GEOJSON_URL ?? "/data/countries.geojson";
+const mapStyleUrl = process.env.NEXT_PUBLIC_MAP_STYLE_URL;
 
-export function WorldMap({ selectedCountryCode, sentimentColor, onCountrySelect }: WorldMapProps) {
+const fallbackStyle: StyleSpecification = {
+  version: 8,
+  sources: {},
+  layers: [
+    {
+      id: "background",
+      type: "background",
+      paint: {
+        "background-color": "#dcd0bc",
+      },
+    },
+  ],
+};
+
+function getCountryCodeFilter(countryCode: string): FilterSpecification {
+  return [
+    "==",
+    [
+      "coalesce",
+      ["get", "iso_a3"],
+      ["get", "ISO_A3"],
+      ["get", "ADM0_A3"],
+      ["get", "adm0_a3"],
+      ["get", "ISO3166-1-Alpha-3"],
+    ],
+    countryCode,
+  ] as FilterSpecification;
+}
+
+function getCountryName(properties: Record<string, unknown> | undefined, fallbackCode: string) {
+  return String(
+    properties?.name ??
+      properties?.NAME ??
+      properties?.name_en ??
+      properties?.ADMIN ??
+      fallbackCode
+  );
+}
+
+function ensureCountryLayers(map: Map, selectedCountryCode: string, sentimentColor: string) {
+  if (!map.getSource(countriesSourceId)) {
+    map.addSource(countriesSourceId, {
+      type: "geojson",
+      data: countriesGeoJsonUrl,
+      generateId: true,
+    });
+  }
+
+  if (!map.getLayer(countryLayerId)) {
+    map.addLayer({
+      id: countryLayerId,
+      type: "fill",
+      source: countriesSourceId,
+      paint: {
+        "fill-color": "#8d9c99",
+        "fill-opacity": 0.55,
+      },
+    });
+  }
+
+  if (!map.getLayer(selectedLayerId)) {
+    map.addLayer({
+      id: selectedLayerId,
+      type: "fill",
+      source: countriesSourceId,
+      filter: getCountryCodeFilter(selectedCountryCode),
+      paint: {
+        "fill-color": sentimentColor,
+        "fill-opacity": 0.34,
+      },
+    });
+  }
+
+  if (!map.getLayer(glowLayerId)) {
+    map.addLayer({
+      id: glowLayerId,
+      type: "line",
+      source: countriesSourceId,
+      filter: getCountryCodeFilter(selectedCountryCode),
+      paint: {
+        "line-color": sentimentColor,
+        "line-width": 2.5,
+        "line-opacity": 0.95,
+      },
+    });
+  }
+
+  if (!map.getLayer("country-borders")) {
+    map.addLayer({
+      id: "country-borders",
+      type: "line",
+      source: countriesSourceId,
+      paint: {
+        "line-color": "#f2ebd9",
+        "line-width": 1.2,
+        "line-opacity": 0.6,
+      },
+    });
+  }
+}
+
+export const WorldMap = memo(function WorldMap({
+  selectedCountryCode,
+  sentimentColor,
+  onCountrySelect,
+}: WorldMapProps) {
   const mapRef = useRef<Map | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [hoveredCountry, setHoveredCountry] = useState<{ name: string; x: number; y: number } | null>(null);
 
   const handleCountrySelect = useEffectEvent(onCountrySelect);
   const pendingVisualStateRef = useRef<{ code: string; color: string }>({
@@ -29,99 +137,46 @@ export function WorldMap({ selectedCountryCode, sentimentColor, onCountrySelect 
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: {
-        version: 8,
-        sources: {
-          countries: {
-            type: "vector",
-            tiles: ["https://demotiles.maplibre.org/tiles/{z}/{x}/{y}.pbf"],
-          },
-        },
-        layers: [
-          {
-            id: "background",
-            type: "background",
-            paint: {
-              "background-color": "#dcd0bc",
-            },
-          },
-          {
-            id: countryLayerId,
-            type: "fill",
-            source: "countries",
-            "source-layer": "countries",
-            paint: {
-              "fill-color": "#8d9c99",
-              "fill-opacity": 0.55,
-            },
-          } satisfies FillLayerSpecification,
-          {
-            id: selectedLayerId,
-            type: "fill-extrusion",
-            source: "countries",
-            "source-layer": "countries",
-            filter: ["==", ["get", "iso_a3"], selectedCountryCode],
-            paint: {
-              "fill-extrusion-color": sentimentColor,
-              "fill-extrusion-height": 1200000,
-              "fill-extrusion-base": 0,
-              "fill-extrusion-opacity": 0.95,
-            },
-          },
-          {
-            id: glowLayerId,
-            type: "line",
-            source: "countries",
-            "source-layer": "countries",
-            filter: ["==", ["get", "iso_a3"], selectedCountryCode],
-            paint: {
-              "line-color": sentimentColor,
-              "line-width": 3,
-              "line-opacity": 0.8,
-              "line-blur": 4,
-            },
-          },
-          {
-            id: "country-borders",
-            type: "line",
-            source: "countries",
-            "source-layer": "countries",
-            paint: {
-              "line-color": "#f2ebd9",
-              "line-width": 1.2,
-              "line-opacity": 0.6,
-            },
-          },
-        ],
-      },
-      center: [12, 24],
-      zoom: 1.4,
+      style: mapStyleUrl || fallbackStyle,
+      center: [78.9629, 22.5937],
+      zoom: 2.2,
       minZoom: 1.2,
       maxZoom: 6,
-      pitch: 45, // 3D globe perspective
-      maxBounds: [[-180, -85], [180, 85]], // Prevent over-scrolling
+      pitch: 34,
+      maxPitch: 48,
+      renderWorldCopies: true,
       attributionControl: false,
     });
 
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
 
     map.on("load", () => {
+      ensureCountryLayers(map, selectedCountryCode, sentimentColor);
       const nextState = pendingVisualStateRef.current;
-      map.setFilter(selectedLayerId, ["==", ["get", "iso_a3"], nextState.code]);
-      map.setPaintProperty(selectedLayerId, "fill-extrusion-color", nextState.color);
-      
-      map.setFilter(glowLayerId, ["==", ["get", "iso_a3"], nextState.code]);
+      const matchExpression = getCountryCodeFilter(nextState.code);
+      map.setFilter(selectedLayerId, matchExpression);
+      map.setPaintProperty(selectedLayerId, "fill-color", nextState.color);
+
+      map.setFilter(glowLayerId, matchExpression);
       map.setPaintProperty(glowLayerId, "line-color", nextState.color);
     });
 
     map.on("click", countryLayerId, (event) => {
-      const feature = event.features?.[0];
-      const countryCode = feature?.properties?.iso_a3;
-      const countryName = feature?.properties?.name ?? countryCode;
+      const props = event.features?.[0]?.properties as Record<string, unknown> | undefined;
+      const countryCode =
+        props?.iso_a3 ??
+        props?.ISO_A3 ??
+        props?.ADM0_A3 ??
+        props?.adm0_a3 ??
+        props?.["ISO3166-1-Alpha-3"];
 
       if (typeof countryCode === "string") {
-        handleCountrySelect(countryCode, String(countryName));
-        
+        if (countryCode === pendingVisualStateRef.current.code) {
+          return;
+        }
+
+        handleCountrySelect(countryCode, getCountryName(props, countryCode));
+
         // Smooth fly to the clicked country
         const coordinates = event.lngLat;
         map.flyTo({
@@ -135,23 +190,38 @@ export function WorldMap({ selectedCountryCode, sentimentColor, onCountrySelect 
       }
     });
 
+    const tooltipPopup = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      className: "atlas-tooltip",
+    });
+
     map.on("mousemove", countryLayerId, (e) => {
       if (e.features && e.features.length > 0) {
         map.getCanvas().style.cursor = "pointer";
-        const name = e.features[0].properties?.name;
+        const props = e.features[0].properties as Record<string, unknown> | undefined;
+        const fallbackCode = String(
+          props?.iso_a3 ??
+            props?.ISO_A3 ??
+            props?.ADM0_A3 ??
+            props?.adm0_a3 ??
+            props?.["ISO3166-1-Alpha-3"] ??
+            "Unknown Region"
+        );
+        const name = getCountryName(props, fallbackCode);
+
         if (name) {
-          setHoveredCountry({
-            name: String(name),
-            x: e.point.x,
-            y: e.point.y,
-          });
+          tooltipPopup
+            .setLngLat(e.lngLat)
+            .setHTML(`<div style="background-color: rgba(23, 49, 58, 0.95); border: 1px solid rgba(23, 49, 58, 0.1); padding: 6px 10px; border-radius: 8px;"><span class="data-font text-[11px] font-semibold tracking-wider text-[#dcd0bc]">${name}</span></div>`)
+            .addTo(map);
         }
       }
     });
 
     map.on("mouseleave", countryLayerId, () => {
       map.getCanvas().style.cursor = "";
-      setHoveredCountry(null);
+      tooltipPopup.remove();
     });
 
     mapRef.current = map;
@@ -168,10 +238,13 @@ export function WorldMap({ selectedCountryCode, sentimentColor, onCountrySelect 
 
     if (!map || !map.isStyleLoaded()) return;
 
-    map.setFilter(selectedLayerId, ["==", ["get", "iso_a3"], selectedCountryCode]);
-    map.setPaintProperty(selectedLayerId, "fill-extrusion-color", sentimentColor);
+    ensureCountryLayers(map, selectedCountryCode, sentimentColor);
+    const matchExpression = getCountryCodeFilter(selectedCountryCode);
 
-    map.setFilter(glowLayerId, ["==", ["get", "iso_a3"], selectedCountryCode]);
+    map.setFilter(selectedLayerId, matchExpression);
+    map.setPaintProperty(selectedLayerId, "fill-color", sentimentColor);
+
+    map.setFilter(glowLayerId, matchExpression);
     map.setPaintProperty(glowLayerId, "line-color", sentimentColor);
   }, [selectedCountryCode, sentimentColor]);
 
@@ -182,21 +255,6 @@ export function WorldMap({ selectedCountryCode, sentimentColor, onCountrySelect 
       
       {/* Map Container */}
       <div ref={containerRef} className="h-[520px] w-full bg-[var(--bg-deep)] md:h-[600px]" />
-
-      {/* Custom Hover Tooltip directly in DOM for better Framer Motion/CSS interop */}
-      {hoveredCountry && (
-        <div
-          className="pointer-events-none absolute z-20 rounded-[14px] border border-[var(--border)] bg-[rgba(240,230,214,0.92)] px-3 py-1.5 shadow-[var(--shadow-outer-sm)] backdrop-blur-md transition-all duration-75"
-          style={{
-            left: hoveredCountry.x + 15,
-            top: hoveredCountry.y + 15,
-          }}
-        >
-          <span className="data-font text-xs font-semibold tracking-wider text-[var(--text)]">
-            {hoveredCountry.name}
-          </span>
-        </div>
-      )}
     </div>
   );
-}
+});

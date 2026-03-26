@@ -10,6 +10,8 @@ def test_prompt_includes_required_json_contract() -> None:
             Article(
                 title="Infrastructure response expands",
                 source="Atlas Wire",
+                provider="gnews",
+                providers=["gnews", "newsdata"],
                 url="https://example.com",
                 snippet="Authorities expand emergency support and announce transport repairs.",
             )
@@ -20,3 +22,4 @@ def test_prompt_includes_required_json_contract() -> None:
     assert '"regional_sentiment"' in prompt
     assert '"situation_report"' in prompt
     assert "United States" in prompt
+    assert "gnews, newsdata" in prompt

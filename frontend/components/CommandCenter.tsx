@@ -1,20 +1,18 @@
 "use client";
 
-import { Suspense, lazy, useEffect, useMemo, useState, useTransition } from "react";
+import { Suspense, lazy, useEffect, useEffectEvent, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { fetchSituationReport } from "@/lib/api";
 import { SituationReport } from "@/lib/types";
 import { NewsCard } from "./NewsCard";
 import { LoadingPanel } from "./LoadingPanel";
-import { TimeTravelSlider } from "./TimeTravelSlider";
 import { SentimentGauge } from "./SentimentGauge";
 import { StatusBar } from "./StatusBar";
+import { TimeTravelSlider } from "./TimeTravelSlider";
 import { Radio } from "lucide-react";
 
 // Lazy load map to keep initial client bundle tight
 const WorldMap = lazy(async () => import("./WorldMap").then((m) => ({ default: m.WorldMap })));
-
-const initialDate = new Date().toISOString().slice(0, 10);
 
 function buildFromDate(daysBack: number) {
   const date = new Date();
@@ -23,51 +21,55 @@ function buildFromDate(daysBack: number) {
 }
 
 export function CommandCenter() {
-  const [selectedCountryCode, setSelectedCountryCode] = useState("USA");
-  const [selectedCountryName, setSelectedCountryName] = useState("United States");
-  const [daysBack, setDaysBack] = useState(0);
-  const [report, setReport] = useState<SituationReport | null>(null);
+  const [selectedCountryCode, setSelectedCountryCode] = useState("IND");
+  const [selectedCountryName, setSelectedCountryName] = useState("India");
+  const [report, setReport] = useState<Partial<SituationReport> | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const [isLoading, setIsLoading] = useState(false);
+  const [daysBack, setDaysBack] = useState(3);
 
-  const fromDate = useMemo(() => buildFromDate(daysBack), [daysBack]);
+  const fromDate = buildFromDate(daysBack);
+  const handleCountrySelect = useEffectEvent((code: string, name: string) => {
+    setSelectedCountryCode((currentCode) => (currentCode === code ? currentCode : code));
+    setSelectedCountryName((currentName) => (currentName === name ? currentName : name));
+  });
 
   useEffect(() => {
     let cancelled = false;
 
-    const loadReport = async () => {
-      try {
-        setError(null);
-        const nextReport = await fetchSituationReport(selectedCountryCode, fromDate);
+    setIsLoading(true);
+    setReport(null);
+    setError(null);
 
-        if (!cancelled) {
-          startTransition(() => {
-            setReport(nextReport);
-            setSelectedCountryName(nextReport.country_name);
-          });
+    void fetchSituationReport(selectedCountryCode, fromDate)
+      .then((data) => {
+        if (cancelled) {
+          return;
         }
-      } catch (requestError) {
-        if (!cancelled) {
-          setError(requestError instanceof Error ? requestError.message : "Network failure — uplink lost.");
+        setReport(data);
+        setIsLoading(false);
+      })
+      .catch((err: Error) => {
+        if (cancelled) {
+          return;
         }
-      }
-    };
-
-    void loadReport();
+        setError(err.message);
+        setIsLoading(false);
+      });
 
     return () => {
       cancelled = true;
     };
   }, [fromDate, selectedCountryCode]);
 
-  // Derived sentiment coloring for UI accents
-  const sentimentColor = report
-    ? report.regional_sentiment >= 0.2
-      ? "var(--positive)"
-      : report.regional_sentiment <= -0.2
-        ? "var(--negative)"
-        : "var(--orange)"
-    : "var(--teal)";
+  // Derived sentiment coloring for UI accents (must be Hex for WebGL MapLibre)
+  const sentimentScore = report?.regional_sentiment ?? 0;
+  const sentimentColor =
+    sentimentScore >= 0.2
+      ? "#218c68" // positive
+      : sentimentScore <= -0.2
+        ? "#b84136" // negative
+        : "#e57c30"; // orange
 
   return (
     <>
@@ -90,7 +92,7 @@ export function CommandCenter() {
                 <div className="flex flex-wrap gap-2">
                   <div className="clay-btn hidden sm:block whitespace-nowrap rounded-full px-4 py-2">
                     <span className="data-font text-xs font-semibold text-[var(--text-soft)] uppercase tracking-[0.24em]">
-                      Uplink: T-{daysBack}d
+                      Uplink: Active
                     </span>
                   </div>
                 </div>
@@ -100,10 +102,7 @@ export function CommandCenter() {
                 <WorldMap
                   selectedCountryCode={selectedCountryCode}
                   sentimentColor={sentimentColor}
-                  onCountrySelect={(code, name) => {
-                    setSelectedCountryCode(code);
-                    setSelectedCountryName(name);
-                  }}
+                  onCountrySelect={handleCountrySelect}
                 />
               </Suspense>
             </section>
@@ -133,8 +132,8 @@ export function CommandCenter() {
               </div>
 
               <div className="relative">
-                {isPending && (
-                  <div className="absolute inset-0 z-10 flex items-center justify-center rounded-[28px] bg-[rgba(255,248,237,0.6)] backdrop-blur-sm">
+                {isLoading && (
+                  <div className="absolute inset-0 z-10 flex items-center justify-center rounded-[28px] bg-[rgba(255,248,237,0.7)] backdrop-blur-sm">
                     <span className="data-font animate-pulse text-xs font-bold uppercase tracking-widest text-[var(--teal)]">
                       Decrypting Stream...
                     </span>
@@ -158,16 +157,15 @@ export function CommandCenter() {
                         Dominant Event
                       </p>
                       <p className="mt-2 text-lg font-bold leading-relaxed tracking-tight text-[var(--text)]">
-                        {report?.main_event ?? "Awaiting initial intelligence stream..."}
+                        {report?.main_event ?? (isLoading ? "Processing Intelligence..." : "Awaiting initial intelligence stream...")}
                       </p>
                     </div>
 
-                    {/* Situation Bullets */}
+                    {/* Situation Bullets or Streaming Text */}
                     <div className="space-y-3">
                       {(report?.situation_report ?? [
-                        "Vector tiles loaded. MapLibre engine standing by.",
+                        "Country boundary map loaded. Atlas interface standing by.",
                         "Select a region to trigger the event summarization pipeline.",
-                        "Adjust the historical dial below to sweep past events.",
                       ]).map((bullet, idx) => (
                         <motion.div
                           key={idx}
@@ -188,11 +186,47 @@ export function CommandCenter() {
                       ))}
                     </div>
 
+                    {!!report?.pipeline_status?.length && (
+                      <div className="mt-6 grid gap-3">
+                        {report.pipeline_status.map((status) => (
+                          <div
+                            key={status.code}
+                            className="rounded-2xl border border-[rgba(23,49,58,0.08)] bg-[rgba(255,255,255,0.45)] px-4 py-3"
+                          >
+                            <p className="data-font text-[10px] font-bold uppercase tracking-[0.22em] text-[var(--teal-soft)]">
+                              {status.code.replaceAll("_", " ")}
+                            </p>
+                            <p className="mt-1 text-sm leading-relaxed text-[var(--text-soft)]">
+                              {status.message}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {!!report?.story_clusters?.length && (
+                      <div className="mt-6 rounded-[28px] border border-[rgba(23,49,58,0.08)] bg-[rgba(255,255,255,0.45)] p-5">
+                        <p className="data-font text-[10px] font-bold uppercase tracking-[0.28em] text-[var(--teal-soft)]">
+                          Story Clusters
+                        </p>
+                        <div className="mt-4 grid gap-3">
+                          {report.story_clusters.slice(0, 4).map((cluster) => (
+                            <div key={cluster.cluster_id} className="rounded-2xl border border-[rgba(23,49,58,0.06)] px-4 py-3">
+                              <p className="text-sm font-semibold text-[var(--text)]">{cluster.representative_title}</p>
+                              <p className="mt-1 text-[12px] text-[var(--muted)]">
+                                {cluster.article_count} reports • {cluster.providers.join(" + ")}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {error && (
-                      <motion.div 
-                        initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-                        className="mt-6 rounded-2xl bg-[var(--negative)]/10 px-4 py-3 border border-[var(--negative)]/20"
-                      >
+                    <motion.div 
+                      initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                      className="mt-6 rounded-2xl bg-[var(--negative)]/10 px-4 py-3 border border-[var(--negative)]/20"
+                    >
                         <p className="data-font text-xs font-bold uppercase tracking-widest text-[var(--negative)]">
                           Error: {error}
                         </p>
@@ -223,9 +257,15 @@ export function CommandCenter() {
                         index={idx}
                         title={article.title}
                         source={article.source}
+                        provider={article.provider}
+                        providers={article.providers}
                         url={article.url}
                         snippet={article.snippet}
                         publishedAt={article.published_at}
+                        isPreferredSource={article.is_preferred_source}
+                        confidence={article.confidence}
+                        category={article.category}
+                        evidencePoints={article.evidence_points}
                       />
                     ))
                   ) : (
@@ -249,7 +289,14 @@ export function CommandCenter() {
       </main>
       
       {/* Global Status Footer */}
-      <StatusBar countryCode={selectedCountryCode} cacheHit={true} />
+      <StatusBar
+        countryCode={selectedCountryCode}
+        providerStatuses={report?.provider_statuses}
+        summaryStatus={report?.summary_status ?? null}
+        pipelineStatus={report?.pipeline_status}
+        articleCacheHit={report?.cache?.article_cache_hit}
+        summaryCacheHit={report?.cache?.summary_cache_hit}
+      />
     </>
   );
 }

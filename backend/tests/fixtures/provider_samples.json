@@ -1,0 +1,24 @@
+{
+  "articles": [
+    {
+      "title": "India parliament approves emergency rail funding after flood disruption",
+      "source": "Reuters",
+      "provider": "worldnews",
+      "providers": ["worldnews"],
+      "url": "https://example.com/rail-funding",
+      "canonical_url": "https://example.com/rail-funding",
+      "snippet": "New Delhi approved emergency rail and bridge funding after flood damage disrupted transport corridors.",
+      "published_at": "2026-03-26T08:00:00Z"
+    },
+    {
+      "title": "India parliament approves emergency rail funding after flood disruption",
+      "source": "AP News",
+      "provider": "newsapi_org",
+      "providers": ["newsapi_org"],
+      "url": "https://example.org/rail-funding",
+      "canonical_url": "https://example.org/rail-funding",
+      "snippet": "Flooding in India forced transport repairs as parliament advanced emergency funding and logistics support.",
+      "published_at": "2026-03-26T07:00:00Z"
+    }
+  ]
+}

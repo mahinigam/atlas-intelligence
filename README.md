@@ -35,6 +35,8 @@ Retro-claymorphic global event command center with a Next.js frontend and FastAP
 ### Frontend
 
 - `NEXT_PUBLIC_API_BASE_URL`: FastAPI base URL, for example `http://localhost:8000`
+- `NEXT_PUBLIC_COUNTRIES_GEOJSON_URL`: Country boundary GeoJSON for the interactive map, for example `/data/countries.geojson`
+- `NEXT_PUBLIC_MAP_STYLE_URL`: Optional MapLibre style URL for a basemap; leave empty to use the built-in fallback background
 
 ### Backend
 
@@ -68,4 +70,4 @@ Retro-claymorphic global event command center with a Next.js frontend and FastAP
 
 - Replace static country metadata with PostGIS reverse lookups from clicked coordinates.
 - Add translation controls by passing the user locale into the Gemini prompt.
-- Swap demo vector tiles for a production world boundary tileset with stable `iso_a3` attributes.
+- If you use a third-party basemap, keep country boundaries on a separate source with stable ISO alpha-3 attributes.

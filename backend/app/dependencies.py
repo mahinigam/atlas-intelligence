@@ -1,7 +1,7 @@
 import logging
 from collections.abc import AsyncIterator
 
-from fastapi import Depends
+from fastapi import Depends, Request
 import httpx
 
 from app.cache import CacheClient
@@ -10,9 +10,15 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-async def get_http_client() -> AsyncIterator[httpx.AsyncClient]:
-    async with httpx.AsyncClient() as client:
+async def get_http_client(request: Request) -> AsyncIterator[httpx.AsyncClient]:
+    client = getattr(request.app.state, "client", None)
+    if client is not None:
         yield client
+        return
+
+    logger.warning("App HTTP client missing from lifespan state; creating request-scoped fallback client")
+    async with httpx.AsyncClient(timeout=40.0) as fallback_client:
+        yield fallback_client
 
 
 async def get_redis():

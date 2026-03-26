@@ -7,3 +7,5 @@ node_modules
 .env
 frontend/.env.local
 backend/.env
+.venv312
+tsconfig.tsbuildinfo

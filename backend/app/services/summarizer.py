@@ -1,29 +1,42 @@
-"""AI summarization service — sends article snippets to Gemini for situation reports."""
+"""AI summarization service — summarizes ranked headline articles with explicit status handling."""
 
 from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 
 import httpx
 
 from app.config import Settings
-from app.schemas import Article, GeminiSummary
+from app.schemas import Article, GeminiSummary, SummaryStatus
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass(slots=True)
+class SummaryExecutionResult:
+    summary: GeminiSummary
+    status: SummaryStatus
+
+
 def build_summary_prompt(country_name: str, from_date: str, articles: list[Article]) -> str:
-    """Build a strict zero-shot prompt that produces a JSON situation report."""
+    """Build a strict prompt using only the selected representative articles."""
     article_lines = "\n".join(
-        f"{index + 1}. Title: {article.title}\nSource: {article.source}\nSnippet: {article.snippet or 'No snippet available.'}"
+        (
+            f"{index + 1}. Title: {article.title}\n"
+            f"Source: {article.source} via {', '.join(article.providers or [article.provider])}\n"
+            f"Published: {article.published_at.isoformat() if article.published_at else 'Unknown'}\n"
+            f"Snippet: {article.snippet or 'No snippet available.'}"
+        )
         for index, article in enumerate(articles[:5])
     )
 
     return (
         "You are Atlas.Intelligence, a geopolitical command-center analyst.\n"
-        "Task: Convert the raw article snippets below into a single strict JSON object.\n"
-        "Do NOT include any markdown, backticks, or commentary outside the JSON.\n\n"
+        "Task: Convert the representative article set below into a single strict JSON object.\n"
+        "These articles were already ranked and deduplicated for country relevance.\n"
+        "Do NOT include markdown, backticks, or commentary outside the JSON.\n\n"
         f"Country: {country_name}\n"
         f"Historical window start: {from_date}\n\n"
         "Required JSON schema (follow EXACTLY):\n"
@@ -37,12 +50,12 @@ def build_summary_prompt(country_name: str, from_date: str, articles: list[Artic
         "  ]\n"
         "}\n\n"
         "Rules:\n"
-        "- Identify the DOMINANT event pattern across all articles.\n"
+        "- Identify the dominant event pattern across all representative articles.\n"
         "- Do NOT repeat article titles as bullets.\n"
         "- If articles conflict, mention uncertainty inside one bullet.\n"
         "- Sentiment: -1 = severe crisis, 0 = neutral, +1 = strongly positive.\n"
-        "- Return ONLY the JSON object, nothing else.\n\n"
-        "Articles:\n"
+        "- Return ONLY the JSON object.\n\n"
+        "Representative articles:\n"
         f"{article_lines}"
     )
 
@@ -54,10 +67,27 @@ async def summarize_articles(
     country_name: str,
     from_date: str,
     articles: list[Article],
-) -> GeminiSummary:
-    """Send articles to Gemini and return a validated summary. Falls back gracefully on errors."""
+) -> SummaryExecutionResult:
+    """Summarize ranked headline articles and return both content and execution state."""
+    if not articles:
+        return SummaryExecutionResult(
+            summary=_placeholder_summary(country_name, from_date, reason="no_articles"),
+            status=SummaryStatus(
+                status="raw_only",
+                message="No representative articles were available for AI summarization.",
+                used_ai=False,
+            ),
+        )
+
     if not settings.gemini_api_key:
-        return _placeholder_summary(country_name, from_date)
+        return SummaryExecutionResult(
+            summary=_placeholder_summary(country_name, from_date, reason="no_api_key"),
+            status=SummaryStatus(
+                status="unconfigured",
+                message="Gemini API key is not configured. Showing raw news only.",
+                used_ai=False,
+            ),
+        )
 
     payload = {
         "contents": [
@@ -88,50 +118,96 @@ async def summarize_articles(
             .get("text", "{}")
         )
 
-        # Strip any markdown fences that Gemini sometimes adds despite instructions
-        cleaned = text_payload.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[-1]
-        if cleaned.endswith("```"):
-            cleaned = cleaned.rsplit("```", 1)[0]
-        cleaned = cleaned.strip()
-
-        parsed = json.loads(cleaned)
-        return GeminiSummary.model_validate(parsed)
+        parsed = json.loads(_strip_code_fences(text_payload))
+        summary = GeminiSummary.model_validate(parsed)
+        return SummaryExecutionResult(
+            summary=summary,
+            status=SummaryStatus(
+                status="ok",
+                message="AI summarization completed successfully.",
+                used_ai=True,
+            ),
+        )
 
     except httpx.HTTPStatusError as exc:
-        logger.error(
-            "Gemini HTTP %s: %s", exc.response.status_code, exc.response.text[:300]
-        )
+        status_code = exc.response.status_code
+        logger.error("Gemini HTTP %s: %s", status_code, exc.response.text[:300])
+        if status_code == 429:
+            return SummaryExecutionResult(
+                summary=_placeholder_summary(country_name, from_date, reason="quota"),
+                status=SummaryStatus(
+                    status="quota_exhausted",
+                    message="AI summarization is currently unavailable. Showing raw news only.",
+                    used_ai=False,
+                ),
+            )
     except json.JSONDecodeError as exc:
         logger.error("Gemini returned non-JSON: %s", exc)
     except Exception as exc:
         logger.error("Gemini summarization failed: %s", exc)
 
-    return _placeholder_summary(country_name, from_date, error=True)
+    return SummaryExecutionResult(
+        summary=_placeholder_summary(country_name, from_date, reason="error"),
+        status=SummaryStatus(
+            status="raw_only",
+            message="AI summarizer temporarily unavailable. Showing raw news only.",
+            used_ai=False,
+        ),
+    )
+
+
+def _strip_code_fences(text_payload: str) -> str:
+    cleaned = text_payload.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[-1]
+    if cleaned.endswith("```"):
+        cleaned = cleaned.rsplit("```", 1)[0]
+    return cleaned.strip()
 
 
 def _placeholder_summary(
-    country_name: str, from_date: str, *, error: bool = False
+    country_name: str,
+    from_date: str,
+    *,
+    reason: str,
 ) -> GeminiSummary:
-    """Return a deterministic placeholder when Gemini is unavailable or errored."""
-    if error:
+    if reason == "quota":
         return GeminiSummary(
-            main_event=f"{country_name} — AI analysis temporarily unavailable",
+            main_event=f"{country_name} — AI analysis unavailable",
             regional_sentiment=0.0,
             situation_report=[
-                "Gemini summarization encountered an error and will retry on next request.",
-                "News ingestion pipeline is active; raw article data is still available below.",
-                f"Historical sweep is anchored to {from_date}.",
+                "AI summarization is currently unavailable, so Atlas is showing ranked raw reporting only.",
+                "Representative articles remain deduplicated, normalized, and country-filtered.",
+                f"Historical sweep remains anchored to {from_date}.",
+            ],
+        )
+    if reason == "no_articles":
+        return GeminiSummary(
+            main_event=f"{country_name} — No representative articles available",
+            regional_sentiment=0.0,
+            situation_report=[
+                "Live providers returned no articles that passed country relevance ranking.",
+                "Atlas withheld weakly matched items instead of fabricating a summary.",
+                f"Historical sweep remains anchored to {from_date}.",
+            ],
+        )
+    if reason == "no_api_key":
+        return GeminiSummary(
+            main_event=f"{country_name} — Awaiting Gemini configuration",
+            regional_sentiment=0.0,
+            situation_report=[
+                "Gemini API key is not configured, so Atlas is showing ranked raw reporting only.",
+                "Provider results are still normalized, deduplicated, and country-filtered.",
+                f"Historical sweep remains anchored to {from_date}.",
             ],
         )
 
     return GeminiSummary(
-        main_event=f"{country_name} — Awaiting Gemini configuration",
+        main_event=f"{country_name} — AI analysis temporarily unavailable",
         regional_sentiment=0.0,
         situation_report=[
-            "Gemini API key is not configured. This is a deterministic placeholder.",
-            "News ingestion is active and will produce real summaries once Vertex access is provided.",
-            f"Historical analysis is currently anchored to {from_date}.",
+            "Gemini summarization encountered an error and Atlas fell back to raw ranked reporting.",
+            "Representative articles remain deduplicated, normalized, and country-filtered.",
+            f"Historical sweep remains anchored to {from_date}.",
         ],
     )

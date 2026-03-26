@@ -7,14 +7,16 @@ type SentimentGaugeProps = {
 };
 
 export function SentimentGauge({ score }: SentimentGaugeProps) {
-  // Convert -1 to 1 into 0 to 180 degrees
+  // Clamp score between -1 and 1
   const clampedScore = Math.max(-1, Math.min(1, score));
-  const rotation = ((clampedScore + 1) / 2) * 180;
+  
+  // Map score (-1 to +1) to rotation (-90deg to +90deg)
+  const rotation = clampedScore * 90;
 
   const getLabel = (s: number) => {
     if (s <= -0.5) return "CRITICAL";
-    if (s < 0) return "TENSE";
-    if (s === 0) return "NEUTRAL";
+    if (s < -0.1) return "TENSE";
+    if (s <= 0.1) return "NEUTRAL";
     if (s < 0.5) return "STABLE";
     return "OPTIMAL";
   };
@@ -25,44 +27,99 @@ export function SentimentGauge({ score }: SentimentGaugeProps) {
     return "var(--orange)";
   };
 
+  const currentColor = getColor(clampedScore);
+  const label = getLabel(clampedScore);
+
   return (
-    <div className="relative flex flex-col items-center">
-      <div className="relative h-[60px] w-[120px] overflow-hidden">
-        {/* The colored arc */}
-        <div
-          className="absolute left-0 top-0 h-[120px] w-[120px] rounded-full border-[12px] border-b-transparent border-l-transparent border-r-[var(--positive)] border-t-transparent"
-          style={{
-            borderTopColor: "var(--orange)",
-            borderLeftColor: "var(--negative)",
-            transform: "rotate(-45deg)",
-          }}
-        />
-        {/* Track background */}
-        <div className="absolute left-0 top-0 h-[120px] w-[120px] rounded-full border-[12px] border-[rgba(23,49,58,0.06)]" />
+    <div className="flex flex-col items-center">
+      {/* Premium Claymorphic Gauge Housing */}
+      <div className="relative flex items-center justify-center rounded-[32px] bg-[rgba(248,242,234,0.6)] px-6 pt-6 pb-4 shadow-[inset_6px_6px_16px_rgba(158,138,114,0.15),inset_-6px_-6px_16px_rgba(255,255,255,0.9)] border border-[rgba(23,49,58,0.03)]">
+        
+        {/* The SVG Speedometer */}
+        <div className="relative h-[85px] w-[170px] overflow-hidden">
+          <svg viewBox="0 0 200 110" className="absolute left-0 top-0 h-full w-full overflow-visible">
+            <defs>
+              <linearGradient id="gaugeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stopColor="var(--negative)" />
+                <stop offset="50%" stopColor="var(--orange)" />
+                <stop offset="100%" stopColor="var(--positive)" />
+              </linearGradient>
+              <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation="4" result="blur" />
+                <feComposite in="SourceGraphic" in2="blur" operator="over" />
+              </filter>
+            </defs>
 
-        {/* The needle */}
-        <motion.div
-          className="absolute bottom-0 left-1/2 h-[50px] w-1 origin-bottom bg-[var(--text)] rounded-full shadow-md"
-          initial={{ rotate: 90 }}
-          animate={{ rotate: rotation }}
-          transition={{ type: "spring", stiffness: 60, damping: 12 }}
-          style={{ transformOrigin: "bottom center", marginLeft: "-2px" }}
-        >
-          {/* Needle Center Pin */}
-          <div className="absolute -bottom-2 -left-1.5 h-4 w-4 rounded-full bg-[var(--text)] border-2 border-[var(--bg)]" />
-        </motion.div>
-      </div>
+            {/* Background Track Arc */}
+            <path
+              d="M 20 100 A 80 80 0 0 1 180 100"
+              fill="none"
+              stroke="rgba(23,49,58,0.06)"
+              strokeWidth="14"
+              strokeLinecap="round"
+            />
 
-      <div className="mt-4 flex flex-col items-center">
-        <span
-          className="data-font text-xl font-bold tracking-wider"
-          style={{ color: getColor(clampedScore) }}
-        >
-          {clampedScore.toFixed(2)}
-        </span>
-        <span className="data-font text-[10px] uppercase tracking-[0.2em] text-[var(--muted)]">
-          {getLabel(clampedScore)}
-        </span>
+            {/* Colored Gradient Arc */}
+            <path
+              d="M 20 100 A 80 80 0 0 1 180 100"
+              fill="none"
+              stroke="url(#gaugeGradient)"
+              strokeWidth="14"
+              strokeLinecap="round"
+              opacity="0.9"
+            />
+
+            {/* Tick Marks */}
+            <g stroke="rgba(23,49,58,0.2)" strokeWidth="2" strokeLinecap="round">
+              <line x1="20" y1="100" x2="30" y2="100" />    {/* -1.0 */}
+              <line x1="46" y1="43" x2="55" y2="52" />      {/* -0.5 */}
+              <line x1="100" y1="20" x2="100" y2="30" />    {/*  0.0 */}
+              <line x1="154" y1="43" x2="145" y2="52" />    {/* +0.5 */}
+              <line x1="180" y1="100" x2="170" y2="100" />  {/* +1.0 */}
+            </g>
+
+            {/* Animated Needle Group */}
+            <motion.g
+              initial={{ rotate: 0 }}
+              animate={{ rotate: rotation }}
+              transition={{ type: "spring", stiffness: 60, damping: 12, mass: 1 }}
+              style={{ originX: 100, originY: 100 }}
+            >
+              {/* Outer Glow behind the needle */}
+              <line
+                x1="100" y1="100" x2="100" y2="28"
+                stroke={currentColor}
+                strokeWidth="6"
+                strokeLinecap="round"
+                opacity="0.3"
+                filter="url(#glow)"
+              />
+              {/* Main Needle Line */}
+              <line
+                x1="100" y1="100" x2="100" y2="28"
+                stroke="var(--bg-deep)"
+                strokeWidth="4"
+                strokeLinecap="round"
+              />
+              {/* Inner Pivot Base */}
+              <circle cx="100" cy="100" r="8" fill="var(--bg-deep)" />
+              <circle cx="100" cy="100" r="4" fill={currentColor} />
+            </motion.g>
+          </svg>
+        </div>
+
+        {/* Floating Metrics Badge */}
+        <div className="absolute -bottom-5 flex flex-col items-center rounded-2xl bg-[rgba(255,255,255,0.85)] px-5 py-1.5 shadow-[grid_glow_shadow] backdrop-blur-md border border-[rgba(23,49,58,0.06)]">
+          <span
+            className="data-font text-[22px] font-bold tracking-widest leading-none drop-shadow-sm"
+            style={{ color: currentColor }}
+          >
+            {clampedScore > 0 ? "+" : ""}{clampedScore.toFixed(2)}
+          </span>
+          <span className="data-font mt-1 text-[9px] uppercase tracking-[0.25em] font-extrabold text-[var(--muted)]">
+            {label}
+          </span>
+        </div>
       </div>
     </div>
   );

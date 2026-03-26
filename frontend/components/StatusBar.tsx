@@ -2,14 +2,40 @@
 
 import { useEffect, useState } from "react";
 import { Activity, Clock, Database, Globe } from "lucide-react";
+import { PipelineStatus, ProviderStatus, SummaryStatus } from "@/lib/types";
 
 type StatusBarProps = {
   countryCode: string | null;
-  cacheHit?: boolean;
+  providerStatuses?: ProviderStatus[];
+  summaryStatus?: SummaryStatus | null;
+  pipelineStatus?: PipelineStatus[];
+  articleCacheHit?: boolean;
+  summaryCacheHit?: boolean;
 };
 
-export function StatusBar({ countryCode, cacheHit }: StatusBarProps) {
+export function StatusBar({
+  countryCode,
+  providerStatuses = [],
+  summaryStatus = null,
+  pipelineStatus = [],
+  articleCacheHit,
+  summaryCacheHit,
+}: StatusBarProps) {
   const [time, setTime] = useState<string>("--:--:--");
+
+  const providerUnavailable = providerStatuses.some((status) =>
+    ["quota_exhausted", "unavailable", "timeout", "cooldown"].includes(status.status)
+  );
+  const rawOnly = pipelineStatus.some((status) => status.code === "showing_raw_news_only");
+  const providerLabel = providerUnavailable ? "NEWS UNAVAILABLE" : "NEWS READY";
+  const summaryLabel =
+    summaryStatus?.status === "quota_exhausted"
+      ? "AI UNAVAILABLE"
+      : summaryStatus?.used_ai
+        ? "AI SUMMARY"
+        : rawOnly
+          ? "RAW ONLY"
+          : "AI READY";
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -34,7 +60,7 @@ export function StatusBar({ countryCode, cacheHit }: StatusBarProps) {
         <div className="hidden items-center gap-1.5 md:flex">
           <Activity size={12} className="text-[var(--teal)]" />
           <span className="data-font text-[10px] uppercase tracking-widest text-[var(--muted)]">
-            Ping: {Math.floor(Math.random() * 20 + 30)}ms
+            Ping: 42ms
           </span>
         </div>
       </div>
@@ -49,14 +75,34 @@ export function StatusBar({ countryCode, cacheHit }: StatusBarProps) {
           </div>
         )}
 
-        {cacheHit !== undefined && (
+        {articleCacheHit !== undefined && (
           <div className="hidden items-center gap-1.5 lg:flex">
-            <Database size={12} className={cacheHit ? "text-[var(--positive)]" : "text-[var(--orange)]"} />
+            <Database
+              size={12}
+              className={articleCacheHit || summaryCacheHit ? "text-[var(--positive)]" : "text-[var(--orange)]"}
+            />
             <span className="data-font text-[10px] uppercase tracking-widest text-[var(--muted)]">
-              {cacheHit ? "CACHE HIT" : "LIVE FETCH"}
+              {articleCacheHit || summaryCacheHit ? "CACHE ACTIVE" : "LIVE FETCH"}
             </span>
           </div>
         )}
+
+        <div className="hidden items-center gap-1.5 lg:flex">
+          <Activity size={12} className={providerUnavailable ? "text-[var(--orange)]" : "text-[var(--teal)]"} />
+          <span className="data-font text-[10px] uppercase tracking-widest text-[var(--muted)]">
+            {providerLabel}
+          </span>
+        </div>
+
+        <div className="hidden items-center gap-1.5 lg:flex">
+          <Activity
+            size={12}
+            className={summaryStatus?.used_ai ? "text-[var(--positive)]" : "text-[var(--orange)]"}
+          />
+          <span className="data-font text-[10px] uppercase tracking-widest text-[var(--muted)]">
+            {summaryLabel}
+          </span>
+        </div>
 
         <div className="flex items-center gap-1.5">
           <Clock size={12} className="text-[var(--teal-soft)]" />
