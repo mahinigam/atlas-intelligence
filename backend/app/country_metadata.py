@@ -722,7 +722,10 @@ def get_country_name(iso_a3: str) -> str:
 def get_iso_a2(iso_a3: str) -> str:
     """Return the ISO_A2 code for news API queries. Falls back to lowercase A3 slice."""
     info = COUNTRIES.get(iso_a3.upper())
-    return info.iso_a2 if info else iso_a3[:2].lower()
+    if info:
+        return info.iso_a2
+    fallback = (iso_a3[0] + iso_a3[1]) if len(iso_a3) >= 2 else iso_a3
+    return fallback.lower()
 
 
 def get_country_info(iso_a3: str) -> CountryInfo | None:
