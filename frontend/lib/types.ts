@@ -10,6 +10,13 @@ export type SituationReport = {
     title: string;
     source: string;
     url: string;
+    snippet?: string | null;
     published_at?: string | null;
   }>;
+};
+
+export type Country = {
+  iso_a3: string;
+  name: string;
+  iso_a2: string;
 };
