@@ -17,9 +17,12 @@ import httpx
 
 from app.cache import CacheClient
 from app.config import Settings
-from app.country_metadata import get_country_name, get_iso_a2
+from app.country_metadata import get_country_info, get_country_name, get_iso_a2
+from app.services.source_reputation import get_source_trust_sync
 from app.schemas import (
     Article,
+    CountryQualitySnapshot,
+    HistoricalMetric,
     ObservabilitySnapshot,
     PipelineStatus,
     ProviderMetric,
@@ -53,74 +56,8 @@ TRACKING_PARAMS = {
     "ref_src",
 }
 
-COUNTRY_SIGNAL_OVERRIDES: dict[str, dict[str, list[str]]] = {
-    "USA": {
-        "aliases": ["united states", "u.s.", "us", "u.s.a.", "america"],
-        "demonyms": ["american", "americans"],
-        "places": ["washington", "washington dc", "new york", "los angeles"],
-        "entities": ["white house", "congress", "pentagon"],
-    },
-    "GBR": {
-        "aliases": ["united kingdom", "u.k.", "uk", "britain", "great britain"],
-        "demonyms": ["british"],
-        "places": ["london", "manchester", "birmingham"],
-        "entities": ["downing street", "westminster"],
-    },
-    "IND": {
-        "aliases": ["india", "bharat"],
-        "demonyms": ["indian"],
-        "places": ["new delhi", "delhi", "mumbai", "bengaluru"],
-        "entities": ["lok sabha", "rajya sabha"],
-    },
-    "ARE": {
-        "aliases": ["united arab emirates", "uae", "u.a.e."],
-        "demonyms": ["emirati"],
-        "places": ["abu dhabi", "dubai"],
-        "entities": [],
-    },
-    "KOR": {
-        "aliases": ["south korea", "republic of korea", "rok"],
-        "demonyms": ["south korean", "korean"],
-        "places": ["seoul", "busan"],
-        "entities": [],
-    },
-    "PRK": {
-        "aliases": ["north korea", "dprk", "democratic people's republic of korea"],
-        "demonyms": ["north korean"],
-        "places": ["pyongyang"],
-        "entities": [],
-    },
-    "RUS": {
-        "aliases": ["russia", "russian federation"],
-        "demonyms": ["russian"],
-        "places": ["moscow", "st petersburg"],
-        "entities": ["kremlin"],
-    },
-    "CHN": {
-        "aliases": ["china", "people's republic of china", "prc"],
-        "demonyms": ["chinese"],
-        "places": ["beijing", "shanghai", "shenzhen"],
-        "entities": [],
-    },
-    "JPN": {
-        "aliases": ["japan"],
-        "demonyms": ["japanese"],
-        "places": ["tokyo", "osaka"],
-        "entities": ["diet"],
-    },
-    "FRA": {
-        "aliases": ["france"],
-        "demonyms": ["french"],
-        "places": ["paris", "marseille", "lyon"],
-        "entities": ["elysee"],
-    },
-    "DEU": {
-        "aliases": ["germany", "federal republic of germany"],
-        "demonyms": ["german"],
-        "places": ["berlin", "munich", "frankfurt"],
-        "entities": ["bundestag"],
-    },
-}
+# COUNTRY_SIGNAL_OVERRIDES has been replaced by enriched CountryInfo in country_metadata.py.
+# The _country_signals() function now reads directly from CountryInfo fields.
 
 GENERIC_POLITICAL_TERMS = [
     "government",
@@ -463,6 +400,21 @@ async def _load_provider_articles(
             "articles": [article.model_dump(mode="json") for article in result.articles],
         },
     )
+
+    # ── Persist timestamped metric to Redis for historical observability ──
+    await cache.append_to_list(
+        f"atlas:metrics:{provider}",
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "provider": provider,
+            "latency_ms": latency_ms,
+            "articles_returned": len(result.articles),
+            "status": result.status,
+            "country_code": country_code,
+        },
+        max_length=500,
+    )
+
     return result
 
 
@@ -1319,38 +1271,71 @@ def _score_country_relevance(country_code: str, article: Article) -> tuple[list[
 
 
 def _country_signals(country_code: str, country_name: str) -> dict[str, list[str]]:
+    """Build relevance signals from the enriched CountryInfo knowledge base."""
     normalized_name = _normalize_key(country_name).replace("-", " ")
     aliases = {normalized_name}
     words = [word for word in normalized_name.split() if len(word) > 3]
     aliases.update(words)
-    overrides = COUNTRY_SIGNAL_OVERRIDES.get(country_code, {})
-    safe_short_aliases = {"uae", "prc", "rok", "dprk"}
+    safe_short_aliases = {"uae", "prc", "rok", "dprk", "uk", "u.k.", "u.s."}
 
-    def clean_terms(terms: list[str]) -> set[str]:
+    def clean_terms(terms: tuple[str, ...] | list[str]) -> set[str]:
         cleaned = {_normalize_key(term).replace("-", " ") for term in terms}
-        return {term for term in cleaned if len(term) >= 3 or term in safe_short_aliases}
+        return {term for term in cleaned if len(term) >= 2 or term in safe_short_aliases}
+
+    info = get_country_info(country_code)
+    if info:
+        aliases.update(clean_terms(info.aliases))
+        if info.capital:
+            aliases.add(_normalize_key(info.capital))
+        demonyms = clean_terms(info.demonyms)
+        places = clean_terms(info.major_cities + info.regions)
+        entities = clean_terms(
+            info.key_entities + info.key_ministries + info.leader_titles
+        )
+    else:
+        demonyms = set()
+        places = set()
+        entities = set()
 
     return {
-        "aliases": sorted(aliases.union(clean_terms(overrides.get("aliases", [])))),
-        "demonyms": sorted(clean_terms(overrides.get("demonyms", []))),
-        "places": sorted(clean_terms(overrides.get("places", []))),
-        "entities": sorted(clean_terms(overrides.get("entities", []))),
+        "aliases": sorted(aliases),
+        "demonyms": sorted(demonyms),
+        "places": sorted(places),
+        "entities": sorted(entities),
     }
 
 
 def _score_source_quality(article: Article, preferred_sources: set[str], penalty_terms: set[str]) -> float:
+    """Score source quality using the source reputation table + provider quality."""
     source_key = _normalize_key(article.source)
     provider_score = PROVIDER_QUALITY.get(article.provider, 0.6)
     penalty = 0.0
     if any(term in source_key for term in penalty_terms):
         penalty = 0.12
+
+    # Use the source reputation service for domain-level trust
+    domain = _source_domain_from_article(article)
+    reputation_score = get_source_trust_sync(domain) if domain else 0.58
+
+    # Blend reputation with provider quality (reputation weighted heavier)
+    blended = (reputation_score * 0.65) + (provider_score * 0.35)
+
     if source_key in preferred_sources:
-        return max(0.0, min(1.0, max(provider_score, 0.96) - penalty))
-    if any(pattern in source_key for pattern in preferred_sources):
-        return max(0.0, min(1.0, max(provider_score, 0.88) - penalty))
-    if "." in source_key:
-        return max(0.0, max(provider_score, 0.72) - penalty)
-    return max(0.0, max(provider_score, 0.58) - penalty)
+        blended = max(blended, 0.92)
+    elif any(pattern in source_key for pattern in preferred_sources):
+        blended = max(blended, 0.85)
+
+    return max(0.0, min(1.0, blended - penalty))
+
+
+def _source_domain_from_article(article: Article) -> str:
+    """Extract the domain from an article URL for reputation lookups."""
+    try:
+        parts = urlsplit(article.url)
+        domain = parts.hostname or ""
+        return domain.lower().removeprefix("www.")
+    except Exception:
+        return ""
 
 
 def _score_freshness(article: Article) -> float:
@@ -1405,29 +1390,53 @@ def _update_country_provider_history(country_code: str, articles: list[Article])
             stats.usable_results += 1
 
 
+def _title_ngrams(title: str, n: int = 2) -> set[str]:
+    """Generate word-level n-grams from a normalized title for Jaccard similarity."""
+    words = _normalize_key(title).split()
+    if len(words) < n:
+        return set(words)
+    return {" ".join(words[i : i + n]) for i in range(len(words) - n + 1)}
+
+
+def _jaccard_similarity(set_a: set[str], set_b: set[str]) -> float:
+    """Compute Jaccard similarity between two sets."""
+    if not set_a or not set_b:
+        return 0.0
+    intersection = len(set_a & set_b)
+    union = len(set_a | set_b)
+    return intersection / union if union else 0.0
+
+
 def _cluster_articles(articles: list[Article]) -> list[StoryCluster]:
-    clusters: list[list[Article]] = []
+    """Cluster articles using Jaccard n-gram similarity with SequenceMatcher fallback."""
+    clusters: list[tuple[set[str], list[Article]]] = []
     for article in articles:
-        matched_cluster = next(
-            (
-                cluster
-                for cluster in clusters
-                if SequenceMatcher(
+        article_ngrams = _title_ngrams(article.title)
+        matched_cluster = None
+        best_score = 0.0
+        for cluster_ngrams, cluster_articles in clusters:
+            # Primary: Jaccard n-gram similarity
+            jaccard = _jaccard_similarity(cluster_ngrams, article_ngrams)
+            if jaccard >= 0.35:
+                # Secondary: SequenceMatcher for confirmation at lower Jaccard scores
+                if jaccard >= 0.55 or SequenceMatcher(
                     None,
-                    _normalize_key(cluster[0].title),
+                    _normalize_key(cluster_articles[0].title),
                     _normalize_key(article.title),
-                ).ratio()
-                >= 0.62
-            ),
-            None,
-        )
+                ).ratio() >= 0.58:
+                    if jaccard > best_score:
+                        best_score = jaccard
+                        matched_cluster = (cluster_ngrams, cluster_articles)
         if matched_cluster is None:
-            clusters.append([article])
+            clusters.append((article_ngrams, [article]))
         else:
-            matched_cluster.append(article)
+            matched_cluster[0].update(article_ngrams)
+            matched_cluster[1].append(article)
 
     story_clusters = []
-    for index, cluster in enumerate(sorted(clusters, key=len, reverse=True), start=1):
+    for index, (_, cluster) in enumerate(
+        sorted(clusters, key=lambda c: len(c[1]), reverse=True), start=1
+    ):
         representative = max(cluster, key=lambda article: article.headline_score)
         story_clusters.append(
             StoryCluster(
@@ -1443,18 +1452,22 @@ def _cluster_articles(articles: list[Article]) -> list[StoryCluster]:
 
 
 def _attach_cluster_ids(articles: list[Article], clusters: list[StoryCluster]) -> list[Article]:
+    """Attach cluster IDs using Jaccard n-gram similarity."""
+    cluster_ngrams = [
+        (_title_ngrams(cluster.representative_title), cluster.cluster_id)
+        for cluster in clusters
+    ]
     attached = []
     for article in articles:
-        cluster_id = next(
-            (
-                cluster.cluster_id
-                for cluster in clusters
-                if SequenceMatcher(None, _normalize_key(cluster.representative_title), _normalize_key(article.title)).ratio()
-                >= 0.62
-            ),
-            None,
-        )
-        attached.append(article.model_copy(update={"cluster_id": cluster_id}))
+        article_ngrams = _title_ngrams(article.title)
+        best_id = None
+        best_score = 0.0
+        for c_ngrams, c_id in cluster_ngrams:
+            score = _jaccard_similarity(c_ngrams, article_ngrams)
+            if score > best_score and score >= 0.30:
+                best_score = score
+                best_id = c_id
+        attached.append(article.model_copy(update={"cluster_id": best_id}))
     return attached
 
 
@@ -1484,6 +1497,69 @@ def _build_observability_snapshot(
 
 def get_global_observability_snapshot() -> ObservabilitySnapshot:
     return _build_observability_snapshot([], [], [])
+
+
+async def get_historical_provider_metrics(
+    cache: CacheClient, provider: str, count: int = 100
+) -> list[HistoricalMetric]:
+    """Retrieve persisted historical metrics for a provider from Redis."""
+    raw = await cache.get_list(f"atlas:metrics:{provider}", count)
+    return [
+        HistoricalMetric(
+            timestamp=datetime.fromisoformat(entry["timestamp"]),
+            provider=entry.get("provider", provider),
+            latency_ms=entry.get("latency_ms", 0.0),
+            articles_returned=entry.get("articles_returned", 0),
+            status=entry.get("status", "unknown"),
+            country_code=entry.get("country_code", ""),
+        )
+        for entry in raw
+        if isinstance(entry, dict) and "timestamp" in entry
+    ]
+
+
+async def get_enriched_observability_snapshot(cache: CacheClient) -> ObservabilitySnapshot:
+    """Build a full observability snapshot with historical data from Redis."""
+    base = _build_observability_snapshot([], [], [])
+
+    # Gather historical metrics from all known providers
+    all_historical: list[HistoricalMetric] = []
+    for provider in PROVIDER_LABELS:
+        metrics = await get_historical_provider_metrics(cache, provider, count=50)
+        all_historical.extend(metrics)
+
+    # Build country quality snapshots from provider history
+    country_quality: list[CountryQualitySnapshot] = []
+    country_codes_seen: set[str] = set()
+    for (code, _), stats in _COUNTRY_PROVIDER_HISTORY.items():
+        if code not in country_codes_seen and stats.total_results > 0:
+            country_codes_seen.add(code)
+            country_quality.append(
+                CountryQualitySnapshot(
+                    country_code=code,
+                    country_name=get_country_name(code),
+                    usable_yield=round(stats.usable_results / max(stats.total_results, 1), 4),
+                    provider_count=sum(
+                        1 for (c, _), s in _COUNTRY_PROVIDER_HISTORY.items()
+                        if c == code and s.usable_results > 0
+                    ),
+                    last_updated=datetime.now(timezone.utc),
+                )
+            )
+
+    # Stale cache warnings
+    stale_warnings: list[str] = []
+    for provider, runtime in _PROVIDER_RUNTIME.items():
+        if runtime.cooldown_until and runtime.cooldown_until > datetime.now(timezone.utc):
+            stale_warnings.append(
+                f"{PROVIDER_LABELS.get(provider, provider)} is in cooldown until "
+                f"{runtime.cooldown_until.strftime('%H:%M:%S UTC')}"
+            )
+
+    base.historical_metrics = sorted(all_historical, key=lambda m: m.timestamp, reverse=True)
+    base.country_quality = sorted(country_quality, key=lambda c: c.usable_yield, reverse=True)
+    base.stale_cache_warnings = stale_warnings
+    return base
 
 
 async def _hydrate_country_provider_history(cache: CacheClient, country_code: str) -> None:

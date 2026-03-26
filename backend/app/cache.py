@@ -31,3 +31,40 @@ class CacheClient:
             await self.redis.set(key, json.dumps(value, default=str), ex=self.ttl_seconds)
         except Exception:
             logger.warning("Redis SET failed for key %s, skipping cache write", key)
+
+    # ── Time-Series Append / Retrieve ─────────────────────────────────────
+    # Used for persisting provider metrics, country quality snapshots, etc.
+
+    async def append_to_list(
+        self, key: str, value: dict[str, Any], *, max_length: int = 500
+    ) -> None:
+        """Append a JSON-serialized entry to a Redis list, trimming to max_length."""
+        if self.redis is None:
+            return
+        try:
+            await self.redis.rpush(key, json.dumps(value, default=str))
+            await self.redis.ltrim(key, -max_length, -1)
+        except Exception:
+            logger.warning("Redis RPUSH failed for key %s", key)
+
+    async def get_list(
+        self, key: str, count: int = 50
+    ) -> list[dict[str, Any]]:
+        """Retrieve recent entries from a Redis list (newest last)."""
+        if self.redis is None:
+            return []
+        try:
+            raw = await self.redis.lrange(key, -count, -1)
+            return [json.loads(entry) for entry in raw]
+        except Exception:
+            logger.warning("Redis LRANGE failed for key %s", key)
+            return []
+
+    async def list_length(self, key: str) -> int:
+        """Return the length of a Redis list key."""
+        if self.redis is None:
+            return 0
+        try:
+            return await self.redis.llen(key) or 0
+        except Exception:
+            return 0

@@ -6,6 +6,7 @@ import { fetchSituationReport } from "@/lib/api";
 import { SituationReport } from "@/lib/types";
 import { NewsCard } from "./NewsCard";
 import { LoadingPanel } from "./LoadingPanel";
+import { ProviderPanel } from "./ProviderPanel";
 import { SentimentGauge } from "./SentimentGauge";
 import { StatusBar } from "./StatusBar";
 import { TimeTravelSlider } from "./TimeTravelSlider";
@@ -237,6 +238,9 @@ export function CommandCenter() {
               </div>
             </section>
 
+            {/* Provider Health Panel */}
+            <ProviderPanel providerStatuses={report?.provider_statuses} />
+
             {/* Raw Feed Panel */}
             <section className="panel flex-1 p-5 md:p-7">
               <div className="mb-6">
@@ -266,6 +270,7 @@ export function CommandCenter() {
                         confidence={article.confidence}
                         category={article.category}
                         evidencePoints={article.evidence_points}
+                        matchedTerms={article.matched_terms}
                       />
                     ))
                   ) : (

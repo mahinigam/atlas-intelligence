@@ -13,8 +13,8 @@ from app.cache import CacheClient
 from app.config import Settings, get_settings
 from app.country_metadata import COUNTRIES, get_country_name
 from app.dependencies import get_cache, get_http_client
-from app.schemas import CacheStatus, GeminiSummary, IntelligenceResponse, PipelineStatus, SummaryStatus
-from app.services.news import fetch_country_news, get_global_observability_snapshot
+from app.schemas import CacheStatus, GeminiSummary, HistoricalMetric, IntelligenceResponse, PipelineStatus, SummaryStatus
+from app.services.news import fetch_country_news, get_enriched_observability_snapshot, get_global_observability_snapshot, get_historical_provider_metrics
 from app.services.summarizer import summarize_articles
 
 logging.basicConfig(
@@ -52,8 +52,26 @@ async def healthcheck() -> dict[str, str]:
 
 
 @app.get(f"{settings.api_prefix}/observability")
-async def observability():
-    return get_global_observability_snapshot()
+async def observability(
+    cache: CacheClient = Depends(get_cache),
+):
+    """Return enriched observability snapshot with historical metrics and country quality."""
+    return await get_enriched_observability_snapshot(cache)
+
+
+@app.get(f"{settings.api_prefix}/observability/providers/{{provider}}")
+async def observability_provider(
+    provider: str,
+    count: int = Query(default=100, ge=1, le=500),
+    cache: CacheClient = Depends(get_cache),
+):
+    """Return historical metrics for a specific provider."""
+    metrics = await get_historical_provider_metrics(cache, provider, count=count)
+    return {
+        "provider": provider,
+        "count": len(metrics),
+        "metrics": [m.model_dump(mode="json") for m in metrics],
+    }
 
 
 @app.get(f"{settings.api_prefix}/countries")

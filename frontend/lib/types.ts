@@ -70,11 +70,33 @@ export type ProviderMetric = {
   last_status: string;
 };
 
+export type HistoricalMetric = {
+  timestamp: string;
+  provider: string;
+  latency_ms: number;
+  articles_returned: number;
+  status: string;
+  country_code: string;
+};
+
+export type CountryQualitySnapshot = {
+  country_code: string;
+  country_name: string;
+  avg_relevance: number;
+  avg_freshness: number;
+  usable_yield: number;
+  provider_count: number;
+  last_updated?: string | null;
+};
+
 export type ObservabilitySnapshot = {
   generated_at: string;
   provider_metrics: ProviderMetric[];
   ranked_article_count: number;
   cluster_count: number;
+  historical_metrics: HistoricalMetric[];
+  country_quality: CountryQualitySnapshot[];
+  stale_cache_warnings: string[];
 };
 
 export type SituationReport = {

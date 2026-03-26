@@ -80,11 +80,38 @@ class ProviderMetric(BaseModel):
     last_status: str = "unknown"
 
 
+# ── Historical Metrics (persisted to Redis time-series) ───────────────────
+
+class HistoricalMetric(BaseModel):
+    """A single timestamped metric record for a provider."""
+    timestamp: datetime
+    provider: str
+    latency_ms: float = 0.0
+    articles_returned: int = 0
+    status: str = "unknown"
+    country_code: str = ""
+
+
+class CountryQualitySnapshot(BaseModel):
+    """Aggregated quality signal for a country's news coverage."""
+    country_code: str
+    country_name: str = ""
+    avg_relevance: float = 0.0
+    avg_freshness: float = 0.0
+    usable_yield: float = 0.0
+    provider_count: int = 0
+    last_updated: datetime | None = None
+
+
 class ObservabilitySnapshot(BaseModel):
     generated_at: datetime
     provider_metrics: list[ProviderMetric] = Field(default_factory=list)
     ranked_article_count: int = 0
     cluster_count: int = 0
+    # Historical data (populated on explicit /observability calls)
+    historical_metrics: list[HistoricalMetric] = Field(default_factory=list)
+    country_quality: list[CountryQualitySnapshot] = Field(default_factory=list)
+    stale_cache_warnings: list[str] = Field(default_factory=list)
 
 
 class GeminiSummary(BaseModel):
