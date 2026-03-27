@@ -127,18 +127,31 @@ async def get_intelligence(
                 from_date=from_date,
                 articles=news_pipeline.headline_articles,
             )
+            summary = summary_result.summary
+            summary_status = summary_result.status
+            await cache.set_json(
+                summary_cache_key,
+                {
+                    "summary": summary.model_dump(mode="json"),
+                    "status": summary_status.model_dump(mode="json"),
+                },
+            )
         except AIUnavailableError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-
-        summary = summary_result.summary
-        summary_status = summary_result.status
-        await cache.set_json(
-            summary_cache_key,
-            {
-                "summary": summary.model_dump(mode="json"),
-                "status": summary_status.model_dump(mode="json"),
-            },
-        )
+            logger.warning("AI Summarization failed for %s: %s", country_code, exc)
+            summary = GeminiSummary(
+                main_event="AI Analytics Unavailable",
+                regional_sentiment=0.0,
+                situation_report=[
+                    "Live news feed is active below.",
+                    "AI summarization is currently throttled by the provider.",
+                    "Please check the raw news feed for direct coverage.",
+                ],
+            )
+            summary_status = SummaryStatus(
+                status="unavailable",
+                message=str(exc),
+                used_ai=False,
+            )
 
     response = IntelligenceResponse(
         country_code=country_code,
