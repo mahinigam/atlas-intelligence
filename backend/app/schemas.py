@@ -1,6 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Coordinates(BaseModel):
@@ -32,6 +33,29 @@ class Article(BaseModel):
     source_trust_score: float = Field(default=0.0, ge=0.0)
     provider_performance_score: float = Field(default=0.0, ge=0.0)
     languages_considered: list[str] = Field(default_factory=list)
+
+    @field_validator("published_at", mode="before")
+    @classmethod
+    def parse_datetime(cls, v: Any) -> datetime | None:
+        if not v or isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            v = v.strip()
+            try:
+                # Handle formats like '2026-03-27 02:11:23 +0000'
+                if " " in v and ("+" in v or "-" in v):
+                    # Replace space before offset with T or just remove it if it's the offset space
+                    # Example: '2026-03-27 02:11:23 +0000' -> '2026-03-27T02:11:23+0000'
+                    parts = v.rsplit(" ", 1)
+                    if len(parts) == 2 and (parts[1].startswith("+") or parts[1].startswith("-")):
+                        v = f"{parts[0].replace(' ', 'T')}{parts[1]}"
+                
+                # Try fromisoformat first (very fast on modern Python)
+                return datetime.fromisoformat(v.replace(" ", "T") if "T" not in v else v)
+            except (ValueError, TypeError):
+                # If everything fails, return None rather than crashing the whole request
+                return None
+        return None
 
 
 class ProviderStatus(BaseModel):
