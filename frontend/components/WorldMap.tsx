@@ -1,7 +1,8 @@
 "use client";
 
 import { memo, useEffect, useEffectEvent, useRef } from "react";
-import maplibregl, { FilterSpecification, Map, StyleSpecification } from "maplibre-gl";
+import * as maptilersdk from "@maptiler/sdk";
+import { FilterSpecification, StyleSpecification } from "maplibre-gl";
 
 type WorldMapProps = {
   selectedCountryCode: string;
@@ -13,9 +14,6 @@ const countryLayerId = "countries-fill";
 const selectedLayerId = "countries-selected";
 const glowLayerId = "countries-glow-border";
 const countriesSourceId = "countries";
-const countriesGeoJsonUrl =
-  process.env.NEXT_PUBLIC_COUNTRIES_GEOJSON_URL ?? "/data/countries.geojson";
-const mapStyleUrl = process.env.NEXT_PUBLIC_MAP_STYLE_URL;
 
 const fallbackStyle: StyleSpecification = {
   version: 8,
@@ -33,16 +31,20 @@ const fallbackStyle: StyleSpecification = {
 
 function getCountryCodeFilter(countryCode: string): FilterSpecification {
   return [
-    "==",
+    "all",
+    ["==", ["get", "level"], 0],
     [
-      "coalesce",
-      ["get", "iso_a3"],
-      ["get", "ISO_A3"],
-      ["get", "ADM0_A3"],
-      ["get", "adm0_a3"],
-      ["get", "ISO3166-1-Alpha-3"],
-    ],
-    countryCode,
+      "==",
+      [
+        "coalesce",
+        ["get", "iso_a3"],
+        ["get", "ISO_A3"],
+        ["get", "ADM0_A3"],
+        ["get", "adm0_a3"],
+        ["get", "ISO3166-1-Alpha-3"],
+      ],
+      countryCode,
+    ]
   ] as FilterSpecification;
 }
 
@@ -56,12 +58,11 @@ function getCountryName(properties: Record<string, unknown> | undefined, fallbac
   );
 }
 
-function ensureCountryLayers(map: Map, selectedCountryCode: string, sentimentColor: string) {
+function ensureCountryLayers(map: maptilersdk.Map, selectedCountryCode: string, sentimentColor: string) {
   if (!map.getSource(countriesSourceId)) {
     map.addSource(countriesSourceId, {
-      type: "geojson",
-      data: countriesGeoJsonUrl,
-      generateId: true,
+      type: "vector",
+      url: `https://api.maptiler.com/tiles/countries/tiles.json?key=${maptilersdk.config.apiKey}`
     });
   }
 
@@ -70,6 +71,8 @@ function ensureCountryLayers(map: Map, selectedCountryCode: string, sentimentCol
       id: countryLayerId,
       type: "fill",
       source: countriesSourceId,
+      "source-layer": "administrative",
+      filter: ["==", ["get", "level"], 0],
       paint: {
         "fill-color": "#8d9c99",
         "fill-opacity": 0.55,
@@ -82,6 +85,7 @@ function ensureCountryLayers(map: Map, selectedCountryCode: string, sentimentCol
       id: selectedLayerId,
       type: "fill",
       source: countriesSourceId,
+      "source-layer": "administrative",
       filter: getCountryCodeFilter(selectedCountryCode),
       paint: {
         "fill-color": sentimentColor,
@@ -95,6 +99,7 @@ function ensureCountryLayers(map: Map, selectedCountryCode: string, sentimentCol
       id: glowLayerId,
       type: "line",
       source: countriesSourceId,
+      "source-layer": "administrative",
       filter: getCountryCodeFilter(selectedCountryCode),
       paint: {
         "line-color": sentimentColor,
@@ -109,6 +114,8 @@ function ensureCountryLayers(map: Map, selectedCountryCode: string, sentimentCol
       id: "country-borders",
       type: "line",
       source: countriesSourceId,
+      "source-layer": "administrative",
+      filter: ["==", ["get", "level"], 0],
       paint: {
         "line-color": "#f2ebd9",
         "line-width": 1.2,
@@ -123,7 +130,7 @@ export const WorldMap = memo(function WorldMap({
   sentimentColor,
   onCountrySelect,
 }: WorldMapProps) {
-  const mapRef = useRef<Map | null>(null);
+  const mapRef = useRef<maptilersdk.Map | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const handleCountrySelect = useEffectEvent(onCountrySelect);
@@ -135,9 +142,12 @@ export const WorldMap = memo(function WorldMap({
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
-    const map = new maplibregl.Map({
+    const apiKey = process.env.NEXT_PUBLIC_MAPTILER_API_KEY;
+    if (apiKey) maptilersdk.config.apiKey = apiKey;
+
+    const map = new maptilersdk.Map({
       container: containerRef.current,
-      style: mapStyleUrl || fallbackStyle,
+      style: maptilersdk.MapStyle.BACKDROP,
       center: [78.9629, 22.5937],
       zoom: 2.2,
       minZoom: 1.2,
@@ -145,10 +155,9 @@ export const WorldMap = memo(function WorldMap({
       pitch: 34,
       maxPitch: 48,
       renderWorldCopies: true,
-      attributionControl: false,
     });
 
-    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+    map.addControl(new maptilersdk.NavigationControl({ visualizePitch: true }), "top-right");
 
     map.on("load", () => {
       ensureCountryLayers(map, selectedCountryCode, sentimentColor);
@@ -190,7 +199,7 @@ export const WorldMap = memo(function WorldMap({
       }
     });
 
-    const tooltipPopup = new maplibregl.Popup({
+    const tooltipPopup = new maptilersdk.Popup({
       closeButton: false,
       closeOnClick: false,
       className: "atlas-tooltip",
