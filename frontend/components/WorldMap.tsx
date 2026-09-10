@@ -149,8 +149,6 @@ export const WorldMap = memo(function WorldMap({
       renderWorldCopies: true,
     });
 
-    map.addControl(new maptilersdk.NavigationControl({ visualizePitch: true }), "top-right");
-
     map.on("load", () => {
       ensureCountryLayers(map);
       const nextState = pendingVisualStateRef.current;
