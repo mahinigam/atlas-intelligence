@@ -2,7 +2,11 @@
 
 import { memo, useEffect, useEffectEvent, useRef } from "react";
 import * as maptilersdk from "@maptiler/sdk";
-import { FilterSpecification, StyleSpecification } from "maplibre-gl";
+import { StyleSpecification } from "maplibre-gl";
+import * as isoCountries from "i18n-iso-countries";
+import enLocale from "i18n-iso-countries/langs/en.json";
+
+isoCountries.registerLocale(enLocale);
 
 type WorldMapProps = {
   selectedCountryCode: string;
@@ -29,25 +33,6 @@ const fallbackStyle: StyleSpecification = {
   ],
 };
 
-function getCountryCodeFilter(countryCode: string): FilterSpecification {
-  return [
-    "all",
-    ["==", ["get", "level"], 0],
-    [
-      "==",
-      [
-        "coalesce",
-        ["get", "iso_a3"],
-        ["get", "ISO_A3"],
-        ["get", "ADM0_A3"],
-        ["get", "adm0_a3"],
-        ["get", "ISO3166-1-Alpha-3"],
-      ],
-      countryCode,
-    ]
-  ] as FilterSpecification;
-}
-
 function getCountryName(properties: Record<string, unknown> | undefined, fallbackCode: string) {
   return String(
     properties?.name ??
@@ -58,11 +43,12 @@ function getCountryName(properties: Record<string, unknown> | undefined, fallbac
   );
 }
 
-function ensureCountryLayers(map: maptilersdk.Map, selectedCountryCode: string, sentimentColor: string) {
+function ensureCountryLayers(map: maptilersdk.Map) {
   if (!map.getSource(countriesSourceId)) {
     map.addSource(countriesSourceId, {
       type: "vector",
-      url: `https://api.maptiler.com/tiles/countries/tiles.json?key=${maptilersdk.config.apiKey}`
+      url: `https://api.maptiler.com/tiles/countries/tiles.json?key=${maptilersdk.config.apiKey}`,
+      promoteId: "iso_a2"
     });
   }
 
@@ -74,22 +60,18 @@ function ensureCountryLayers(map: maptilersdk.Map, selectedCountryCode: string, 
       "source-layer": "administrative",
       filter: ["==", ["get", "level"], 0],
       paint: {
-        "fill-color": "#8d9c99",
-        "fill-opacity": 0.55,
-      },
-    });
-  }
-
-  if (!map.getLayer(selectedLayerId)) {
-    map.addLayer({
-      id: selectedLayerId,
-      type: "fill",
-      source: countriesSourceId,
-      "source-layer": "administrative",
-      filter: getCountryCodeFilter(selectedCountryCode),
-      paint: {
-        "fill-color": sentimentColor,
-        "fill-opacity": 0.34,
+        "fill-color": [
+          "case",
+          ["boolean", ["feature-state", "selected"], false],
+          ["feature-state", "color"],
+          "rgba(0,0,0,0)"
+        ],
+        "fill-opacity": [
+          "case",
+          ["boolean", ["feature-state", "selected"], false],
+          0.34,
+          0
+        ]
       },
     });
   }
@@ -100,11 +82,21 @@ function ensureCountryLayers(map: maptilersdk.Map, selectedCountryCode: string, 
       type: "line",
       source: countriesSourceId,
       "source-layer": "administrative",
-      filter: getCountryCodeFilter(selectedCountryCode),
+      filter: ["==", ["get", "level"], 0],
       paint: {
-        "line-color": sentimentColor,
+        "line-color": [
+          "case",
+          ["boolean", ["feature-state", "selected"], false],
+          ["feature-state", "color"],
+          "rgba(0,0,0,0)"
+        ],
         "line-width": 2.5,
-        "line-opacity": 0.95,
+        "line-opacity": [
+          "case",
+          ["boolean", ["feature-state", "selected"], false],
+          0.95,
+          0
+        ]
       },
     });
   }
@@ -160,24 +152,19 @@ export const WorldMap = memo(function WorldMap({
     map.addControl(new maptilersdk.NavigationControl({ visualizePitch: true }), "top-right");
 
     map.on("load", () => {
-      ensureCountryLayers(map, selectedCountryCode, sentimentColor);
+      ensureCountryLayers(map);
       const nextState = pendingVisualStateRef.current;
-      const matchExpression = getCountryCodeFilter(nextState.code);
-      map.setFilter(selectedLayerId, matchExpression);
-      map.setPaintProperty(selectedLayerId, "fill-color", nextState.color);
-
-      map.setFilter(glowLayerId, matchExpression);
-      map.setPaintProperty(glowLayerId, "line-color", nextState.color);
+      const iso2 = isoCountries.alpha3ToAlpha2(nextState.code) || nextState.code;
+      map.setFeatureState(
+        { source: countriesSourceId, sourceLayer: "administrative", id: iso2 },
+        { selected: true, color: nextState.color }
+      );
     });
 
     map.on("click", countryLayerId, (event) => {
       const props = event.features?.[0]?.properties as Record<string, unknown> | undefined;
-      const countryCode =
-        props?.iso_a3 ??
-        props?.ISO_A3 ??
-        props?.ADM0_A3 ??
-        props?.adm0_a3 ??
-        props?.["ISO3166-1-Alpha-3"];
+      const clickedIso2 = props?.iso_a2 ?? props?.ISO_A2;
+      const countryCode = clickedIso2 ? isoCountries.alpha2ToAlpha3(String(clickedIso2)) : undefined;
 
       if (typeof countryCode === "string") {
         if (countryCode === pendingVisualStateRef.current.code) {
@@ -209,14 +196,8 @@ export const WorldMap = memo(function WorldMap({
       if (e.features && e.features.length > 0) {
         map.getCanvas().style.cursor = "pointer";
         const props = e.features[0].properties as Record<string, unknown> | undefined;
-        const fallbackCode = String(
-          props?.iso_a3 ??
-            props?.ISO_A3 ??
-            props?.ADM0_A3 ??
-            props?.adm0_a3 ??
-            props?.["ISO3166-1-Alpha-3"] ??
-            "Unknown Region"
-        );
+        const clickedIso2 = props?.iso_a2 ?? props?.ISO_A2;
+        const fallbackCode = clickedIso2 ? (isoCountries.alpha2ToAlpha3(String(clickedIso2)) || String(clickedIso2)) : "Unknown Region";
         const name = getCountryName(props, fallbackCode);
 
         if (name) {
@@ -243,18 +224,30 @@ export const WorldMap = memo(function WorldMap({
 
   useEffect(() => {
     const map = mapRef.current;
+    
+    if (!map || !map.isStyleLoaded()) {
+      pendingVisualStateRef.current = { code: selectedCountryCode, color: sentimentColor };
+      return;
+    }
+
+    ensureCountryLayers(map);
+    const prevState = pendingVisualStateRef.current;
+    const currentIso2 = isoCountries.alpha3ToAlpha2(selectedCountryCode) || selectedCountryCode;
+    
+    if (prevState.code && prevState.code !== selectedCountryCode) {
+      const prevIso2 = isoCountries.alpha3ToAlpha2(prevState.code) || prevState.code;
+      map.setFeatureState(
+        { source: countriesSourceId, sourceLayer: "administrative", id: prevIso2 },
+        { selected: false }
+      );
+    }
+
+    map.setFeatureState(
+      { source: countriesSourceId, sourceLayer: "administrative", id: currentIso2 },
+      { selected: true, color: sentimentColor }
+    );
+
     pendingVisualStateRef.current = { code: selectedCountryCode, color: sentimentColor };
-
-    if (!map || !map.isStyleLoaded()) return;
-
-    ensureCountryLayers(map, selectedCountryCode, sentimentColor);
-    const matchExpression = getCountryCodeFilter(selectedCountryCode);
-
-    map.setFilter(selectedLayerId, matchExpression);
-    map.setPaintProperty(selectedLayerId, "fill-color", sentimentColor);
-
-    map.setFilter(glowLayerId, matchExpression);
-    map.setPaintProperty(glowLayerId, "line-color", sentimentColor);
   }, [selectedCountryCode, sentimentColor]);
 
   return (
