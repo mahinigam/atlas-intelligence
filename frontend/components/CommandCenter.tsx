@@ -69,7 +69,7 @@ export function CommandCenter() {
         <div className="mx-auto grid max-w-[1600px] gap-6 lg:grid-cols-[1.4fr_1fr]">
           
           {/* LEFT COLUMN: Map & Controls */}
-          <div className="flex flex-col gap-6">
+          <div className="flex flex-col gap-6 lg:sticky lg:top-6 lg:self-start lg:z-10">
             <section className="panel flex-1 p-3 md:p-5">
               <div className="mb-4 flex flex-col md:flex-row md:items-center justify-between gap-4 rounded-3xl bg-[rgba(255,248,237,0.4)] px-5 py-4 border border-[rgba(23,49,58,0.04)] shadow-[var(--shadow-inner)]">
                 <div>
